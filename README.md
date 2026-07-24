@@ -534,3 +534,49 @@ Rode-o **apos** o pipeline principal ter populado a camada silver.
 - **PySpark** usado nas etapas bronze e silver (requisito do case).
 - **Parametrizacao via widgets**, permitindo reprocessamento/backfill sem
   alterar codigo.
+
+## Limitacoes e melhorias futuras
+
+- **Escrita apenas em `overwrite`:** por conta do volume dos arquivos (e do
+  tempo disponivel), todas as camadas gravam com `mode("overwrite")` /
+  `CREATE OR REPLACE TABLE`, reprocessando a tabela inteira a cada execucao. O
+  **ideal** seria uma escrita **incremental por `MERGE`** (upsert Delta /
+  `MERGE INTO`), atualizando apenas as particoes/chaves afetadas � isso **nao
+  foi implementado por restricao de tempo**. Os dados ja estao preparados para
+  isso (particionamento por `pickup_year`/`pickup_month` no bronze/silver e por
+  `service_type_key` no fato; chaves de negocio disponiveis).
+- **Armazenamento:** o mais adequado para escala seria persistir os arquivos em
+  **Parquet num bucket S3** (data lake externo, com ciclo de vida/custos
+  controlados). Aqui isso **nao foi feito por limitacoes do Unity Catalog** na
+  Free Edition (sem external locations / storage credentials configuraveis para
+  um S3 proprio): usamos **Volumes/Delta gerenciados** dentro do UC. Em um
+  ambiente com UC completo, o caminho seria registrar uma *external location*
+  apontando para o S3 e gravar as tabelas como *external* em Parquet/Delta.
+- **Qualidade de dados sem quarentena:** o silver mantem todas as linhas (nao
+  filtra fares negativos, `dropoff < pickup`, datas fora do periodo, etc.). O
+  ideal seria uma camada de **validacao** (
+  Great Expectations ou testes com pyspark) e uma tabela de **quarentena** para registros invalidos,
+  antes/dentro do gold.
+- **Medidas nao 100% conformadas no fato:** `fhv` nao tem tarifa/passageiros
+  (ficam `NULL`) e o `total_amount` do `fhvhv` e uma **soma estimada** dos
+  componentes (base + tolls + bcf + sales_tax + congestion + airport_fee + tips),
+  nao um valor oficial fim-a-fim. Comparacoes de receita entre tipos devem
+  considerar isso.
+- **Dimensoes Type-1 recriadas a cada execucao:** `dim_zone`/`dim_date`/etc. sao
+  reconstruidas (sem historico/SCD Type-2) e as *surrogate keys* do fato
+  (`monotonically_increasing_id()`) **nao sao estaveis entre execucoes** - o que
+  e aceitavel com `overwrite`, mas precisaria mudar para carga incremental.
+- **Sem OPTIMIZE/ZORDER/VACUUM:** nao ha manutencao das tabelas Delta
+  (compactacao de arquivos pequenos, *data skipping* por ZORDER, expiracao de
+  versoes antigas), o que ajudaria performance e custo em producao.
+- **Fuso horario:** os timestamps da TLC (horario local de NY) sao usados como
+  estao, sem normalizacao de timezone - analises por hora assumem horario local.
+- **Cubo sem poda:** `cube_trips` faz `GROUP BY CUBE` completo (2^6 grouping
+  sets) sobre dimensoes de alta cardinalidade (`hour`, `pickup_borough`); em
+  volumes maiores pode ficar caro - valeria restringir combinacoes ou pre-filtrar.
+- **Testes cobrem apenas a logica Python:** as transformacoes puras
+  (`transforms.py`) tem pytest, mas o **SQL do gold** (dimensoes/fato/agregados)
+  nao tem testes automatizados nem validacao no CI.
+- **Datas fixas e execucao manual:** o periodo `2023-01-01..2023-05-01` esta
+  fixo nos `base_parameters` dos jobs e nao ha *schedule*/trigger automatico -
+  os jobs sao disparados manualmente.
