@@ -1,0 +1,27 @@
+resources:
+  jobs:
+    nyc_taxi_gold:
+      name: nyc_taxi_gold
+      max_concurrent_runs: 1
+
+      # Job SEPARADO da camada gold (star schema + agregados + cubo), em SQL.
+      # Roda apos a silver estar populada. Sem job_clusters: compute serverless.
+      tasks:
+        # 1) Dimensoes conformadas do star schema.
+        - task_key: gold_dimensions
+          notebook_task:
+            notebook_path: ../src/gold/dimensions.sql
+
+        # 2) Fato unificado (depende das dimensoes).
+        - task_key: gold_fact_trips
+          depends_on:
+            - task_key: gold_dimensions
+          notebook_task:
+            notebook_path: ../src/gold/fact_trips.sql
+
+        # 3) Agregados pedidos + cubo analitico (dependem do fato).
+        - task_key: gold_aggregations
+          depends_on:
+            - task_key: gold_fact_trips
+          notebook_task:
+            notebook_path: ../src/gold/aggregations.sql

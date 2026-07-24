@@ -1,0 +1,49 @@
+{
+    "settings": {
+        "name": "nyc_taxi_gold",
+        "format": "MULTI_TASK",
+        "max_concurrent_runs": 1,
+        "email_notifications": {},
+        "git_source": {
+            "git_branch": "main",
+            "git_provider": "gitHub",
+            "git_url": "https://github.com/samutavares/nyc-dbx-test"
+        },
+        "tasks": [
+            {
+                "task_key": "gold_dimensions",
+                "notebook_task": {
+                    "notebook_path": "src/gold/dimensions",
+                    "source": "GIT"
+                },
+                "timeout_seconds": 0
+            },
+            {
+                "task_key": "gold_fact_trips",
+                "depends_on": [
+                    {
+                        "task_key": "gold_dimensions"
+                    }
+                ],
+                "notebook_task": {
+                    "notebook_path": "src/gold/fact_trips",
+                    "source": "GIT"
+                },
+                "timeout_seconds": 0
+            },
+            {
+                "task_key": "gold_aggregations",
+                "depends_on": [
+                    {
+                        "task_key": "gold_fact_trips"
+                    }
+                ],
+                "notebook_task": {
+                    "notebook_path": "src/gold/aggregations",
+                    "source": "GIT"
+                },
+                "timeout_seconds": 0
+            }
+        ]
+    }
+}

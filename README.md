@@ -6,9 +6,9 @@ dados de corridas de taxi de Nova York (NYC TLC), referentes a
 
 O projeto segue uma **arquitetura medallion** (landing/raw -> bronze ->
 silver -> gold), usando **PySpark**, tabelas **Delta** e **Unity Catalog**
-(namespace de tres niveis `catalog.schema.table`). O escopo atual entrega ate a
-camada **silver** (padronizada, consultavel via SQL); a **gold** (analise) e o
-proximo passo.
+(namespace de tres niveis `catalog.schema.table`). As camadas raw/bronze/silver
+estao implementadas; a **gold** e modelada como **star schema** (fato +
+dimensoes), com as tabelas agregadas (data marts) como proximo passo.
 
 > **Alvo: Databricks Free Edition.** A Free Edition (que substituiu a Community
 > Edition, aposentada no fim de 2025) ja vem com **Unity Catalog** e **compute
@@ -33,9 +33,9 @@ proximo passo.
                         v
         [ Silver ] Delta table nyc_taxi.silver.<taxi_type>_trips      (todas as colunas)
                         |
-                        | (4) [gold - a construir depois] analise/agregacao
+                        | (4) gold: star schema (fact_trips + dim_*)
                         v
-                   Gold / Analises (futuro)
+        [ Gold ] nyc_taxi.gold.fact_trips + dimensoes + agregados (data marts)
 ```
 
 **Tipos de taxi:** `raw`, `bronze` e `silver` rodam para os **quatro** datasets
@@ -77,21 +77,27 @@ Projetotaxinyc/
 |  +- zone_lookup.py         # (3) carrega taxi_zone_lookup como dimensao Delta
 |  +- silver/
 |  |  +- template.py         # (4) template silver por tipo: snake_case + tipagem + zonas
+|  +- gold/                  # (5) camada gold em SQL (star schema + agregados)
+|  |  +- dimensions.sql      #     dimensoes conformadas
+|  |  +- fact_trips.sql      #     fato unificado dos 4 tipos
+|  |  +- aggregations.sql    #     marts pedidos + cubo analitico (GROUP BY CUBE)
 |  +- run_pipeline.py        # orquestrador interativo (dbutils.notebook.run)
 |  +- lib/
 |     +- transforms.py       # logica pura das tabelas (testavel via pytest)
 |     +- data_dictionary.py  # descricoes de colunas (TLC) + to_snake_case
 +- analysis/
-|  +- business_questions.py  # base para a futura camada gold (analise)
+|  +- business_questions.py  # exploracao inicial (superada pela gold em SQL)
 +- tests/
 |  +- conftest.py            # fixture de SparkSession local
 |  +- test_utils.py          # testes de month_list / detect_pickup_col / comments
 |  +- test_bronze.py         # testes da tabela bronze + unify_schemas
 |  +- test_silver.py         # testes da tabela silver + enriquecimento de zonas
 +- jobs/
-|  +- nyc_taxi_pipeline.json # job serverless multi-task (Databricks Jobs API 2.1)
+|  +- nyc_taxi_pipeline.json # job raw->silver (Databricks Jobs API 2.1)
+|  +- nyc_taxi_gold.json      # job separado da camada gold (Jobs API 2.1)
 +- resources/
-|  +- nyc_taxi_pipeline.job.yml # definicao do job para DAB
+|  +- nyc_taxi_pipeline.job.yml # job raw->silver para DAB
+|  +- nyc_taxi_gold.job.yml     # job da gold para DAB
 +- .github/
 |  +- workflows/
 |     +- deploy.yml          # CI/CD: testes + deploy do bundle (GitHub Actions)
@@ -112,7 +118,8 @@ Tudo vive sob o catalogo **`nyc_taxi`**, organizado em schemas por camada:
 | bronze   | `nyc_taxi.bronze.<taxi_type>_trips`      | replica exata em Delta (todas colunas)   |
 | silver   | `nyc_taxi.silver.<taxi_type>_trips`      | padronizacao leve, TODAS as colunas      |
 | silver   | `nyc_taxi.silver.taxi_zone_lookup`       | dimensao de zonas (borough/zona/servico) |
-| gold     | _a construir depois_                     | analise/agregacao (perguntas de negocio) |
+| gold     | `nyc_taxi.gold.fact_trips` + `dim_*`     | star schema (fato + dimensoes)           |
+| gold     | `nyc_taxi.gold.agg_*`                    | tabelas agregadas (data marts)           |
 
 - A landing zone e um **Unity Catalog Volume** (`/Volumes/nyc_taxi/raw/landing`),
   o armazenamento governado recomendado na Free Edition.
@@ -264,10 +271,12 @@ databricks jobs create --json-file jobs/nyc_taxi_pipeline.json
 
 ## Deploy com Databricks Asset Bundles (DAB)
 
-A Free Edition suporta **DAB**, a forma recomendada de versionar e implantar o
-job de forma declarativa. A configuracao esta em `databricks.yml` (bundle +
-targets) e a definicao do job em `resources/nyc_taxi_pipeline.job.yml`. O
-bundle sincroniza os notebooks e cria o job serverless no workspace.
+A Free Edition suporta **DAB**, a forma recomendada de versionar e implantar os
+jobs de forma declarativa. A configuracao esta em `databricks.yml` (bundle +
+targets); `include: resources/*.yml` carrega **os dois jobs**:
+`resources/nyc_taxi_pipeline.job.yml` (raw->silver) e
+`resources/nyc_taxi_gold.job.yml` (gold). O bundle sincroniza os notebooks e
+cria os jobs serverless no workspace.
 
 ```bash
 # 1. instale a Databricks CLI (>= 0.205) e autentique
@@ -276,7 +285,8 @@ databricks configure            # ou: export DATABRICKS_HOST / DATABRICKS_TOKEN
 # 2. valide, implante e rode
 databricks bundle validate
 databricks bundle deploy -t dev
-databricks bundle run nyc_taxi_pipeline -t dev
+databricks bundle run nyc_taxi_pipeline -t dev   # raw -> bronze -> silver
+databricks bundle run nyc_taxi_gold -t dev       # star schema + agregados + cubo
 ```
 
 O `host` e o token vem das variaveis de ambiente `DATABRICKS_HOST` /
@@ -340,20 +350,164 @@ workflow manualmente (aba Actions -> Run workflow) marcando `run_pipeline`.
 > CI. Alternativamente, a Databricks recomenda **OIDC** (sem token), definindo
 > `DATABRICKS_AUTH_TYPE=github-oidc` + `DATABRICKS_CLIENT_ID` no lugar do token.
 
-## Camada gold / analise (proximo passo)
+## Camada gold - modelagem estrela (star schema)
 
-A analise das perguntas de negocio sera implementada na camada **gold**, a
-partir das tabelas silver. O notebook `analysis/business_questions.py` serve de
-ponto de partida para as duas perguntas do case:
+A camada **gold** (`nyc_taxi.gold`) modela os dados em um **esquema estrela**:
+uma tabela **fato** central (`fact_trips`, grao = uma corrida) cercada por
+**dimensoes conformadas**. As dimensoes sao compartilhadas por todos os tipos de
+taxi, e a coluna `service_type` (via `dim_service_type`) distingue a origem
+(yellow/green/fhv/fhvhv). `dim_zone` e uma dimensao **role-playing** (usada duas
+vezes: embarque e desembarque).
 
-1. **Media de `total_amount` por mes (yellow).**
-   Agregacao por `pickup_year, pickup_month` com `AVG(total_amount)`.
-2. **Media de `passenger_count` por hora do dia em Maio.**
-   Agregacao por `HOUR(pickup_datetime)` filtrando `pickup_month = 5`.
+```mermaid
+erDiagram
+    dim_date            ||--o{ fact_trips : pickup_date_key
+    dim_time            ||--o{ fact_trips : pickup_time_key
+    dim_zone            ||--o{ fact_trips : "pickup_zone_key / dropoff_zone_key"
+    dim_vendor          ||--o{ fact_trips : vendor_key
+    dim_rate_code       ||--o{ fact_trips : rate_code_key
+    dim_payment_type    ||--o{ fact_trips : payment_type_key
+    dim_service_type    ||--o{ fact_trips : service_type_key
+    dim_hvfhs_license   ||--o{ fact_trips : hvfhs_license_key
 
-> Observacao: como o silver agora usa **snake_case**, a coluna de embarque do
-> yellow chama-se `tpep_pickup_datetime` (a original, ja em snake_case). O gold
-> deve referenciar os nomes padronizados das tabelas silver.
+    fact_trips {
+        bigint    trip_sk PK
+        int       pickup_date_key FK
+        int       pickup_time_key FK
+        int       dropoff_date_key FK
+        int       pickup_zone_key FK
+        int       dropoff_zone_key FK
+        int       vendor_key FK
+        int       rate_code_key FK
+        int       payment_type_key FK
+        int       service_type_key FK
+        int       hvfhs_license_key FK
+        timestamp pickup_datetime
+        timestamp dropoff_datetime
+        double    trip_distance
+        int       trip_duration_min
+        int       passenger_count
+        double    fare_amount
+        double    tip_amount
+        double    tolls_amount
+        double    total_amount
+        boolean   is_airport_trip
+    }
+    dim_date {
+        int     date_key PK
+        date    full_date
+        int     year
+        int     month
+        int     day
+        int     quarter
+        int     week_of_year
+        int     day_of_week
+        string  day_name
+        boolean is_weekend
+    }
+    dim_time {
+        int    time_key PK
+        int    hour
+        string period_of_day
+    }
+    dim_zone {
+        int    zone_key PK
+        int    location_id
+        string borough
+        string zone
+        string service_zone
+    }
+    dim_vendor {
+        int    vendor_key PK
+        string vendor_name
+    }
+    dim_rate_code {
+        int    rate_code_key PK
+        string rate_code_name
+    }
+    dim_payment_type {
+        int    payment_type_key PK
+        string payment_type_name
+    }
+    dim_service_type {
+        int    service_type_key PK
+        string service_type
+        string description
+    }
+    dim_hvfhs_license {
+        int    hvfhs_license_key PK
+        string hvfhs_license_num
+        string hvfhs_license_name
+    }
+```
+
+### Tabela fato
+
+- **`gold.fact_trips`** - grao de **uma corrida**. Consolida os quatro tipos de
+  taxi das tabelas silver, com **medidas conformadas** (mapeadas entre os tipos):
+  `trip_distance`, `trip_duration_min` (derivada de dropoff - pickup),
+  `passenger_count`, `fare_amount`, `tip_amount`, `tolls_amount`, `total_amount`,
+  `is_airport_trip`. Guarda as **chaves substitutas** (FK) para cada dimensao.
+  Colunas sem correspondencia num tipo (ex.: `passenger_count` no fhv/fhvhv)
+  ficam `NULL`.
+
+### Dimensoes conformadas
+
+| Dimensao             | Grao / conteudo                                                        | Origem                                   |
+|----------------------|------------------------------------------------------------------------|------------------------------------------|
+| `gold.dim_date`      | um dia (calendario: ano, mes, dia, trimestre, semana, fim de semana)   | gerada do intervalo de datas             |
+| `gold.dim_time`      | uma hora do dia (0-23) + `period_of_day` (madrugada/manha/tarde/noite) | gerada                                   |
+| `gold.dim_zone`      | uma TLC Taxi Zone (borough/zone/service_zone)                          | `silver.taxi_zone_lookup`                |
+| `gold.dim_vendor`    | provedor (1=Creative Mobile Technologies; 2=VeriFone Inc.)             | `VENDOR_NAMES`                           |
+| `gold.dim_rate_code` | codigo de tarifa (1=Standard ... 6=Group ride)                         | `RATECODE_NAMES`                         |
+| `gold.dim_payment_type` | forma de pagamento (1=Cartao ... 6=Anulada)                         | `PAYMENT_TYPE_NAMES`                      |
+| `gold.dim_service_type` | tipo de servico (yellow/green/fhv/fhvhv)                            | fixa                                     |
+| `gold.dim_hvfhs_license` | empresa HVFHS (Juno/Uber/Via/Lyft)                                 | `HVFHS_LICENSE_NAMES`                     |
+
+As dimensoes reaproveitam os mapas codigo->rotulo definidos em
+`src/lib/data_dictionary.py`.
+
+### Implementacao (SQL) e execucao
+
+A gold e construida em **SQL** (notebooks `.sql` do Databricks), em tres etapas:
+
+| Notebook (`src/gold/`) | O que cria                                                        |
+|------------------------|-------------------------------------------------------------------|
+| `dimensions.sql`       | `dim_service_type`, `dim_vendor`, `dim_rate_code`, `dim_payment_type`, `dim_hvfhs_license`, `dim_zone`, `dim_time`, `dim_date` |
+| `fact_trips.sql`       | `fact_trips` (UNION dos 4 tipos + join com as dimensoes)          |
+| `aggregations.sql`     | `agg_*` (marts) + `cube_trips` (cubo analitico)                   |
+
+`fact_trips` e materializado com `CREATE OR REPLACE TABLE ... AS SELECT`,
+particionado por `service_type_key`; chaves sem match caem no membro
+desconhecido (`0`/`-1`).
+
+### Tabelas agregadas e cubo analitico
+
+Sobre o star schema sao materializadas (Delta, em `nyc_taxi.gold.*`):
+
+- **`agg_revenue_monthly`** - metricas por `service_type, year, month`
+  (`avg_total_amount`, `sum_total_amount`, `avg_trip_distance`, ...). **Responde
+  a pergunta 1** (media de `total_amount` por mes; filtre `service_type='yellow'`).
+- **`agg_trips_by_hour`** - metricas por `service_type, year, month, hour`
+  (`avg_passenger_count`, `trips`, ...). Base para a **pergunta 2** (media de
+  `passenger_count` por hora; filtre `month=5`).
+- **`agg_trips_by_zone`** - volume/receita por `borough`/`zone` de embarque.
+- **`cube_trips`** - **cubo OLAP** via `GROUP BY CUBE` sobre 6 dimensoes
+  (`service_type, year, month, hour, pickup_borough, payment_type_name`),
+  gerando todos os subtotais. A coluna `grouping_id` identifica o nivel de
+  agregacao (`NULL` numa dimensao = "todos"; `grouping_id = 0` = grao detalhado).
+
+### Job separado da gold
+
+A gold roda em um **job proprio** (`nyc_taxi_gold`), separado do pipeline
+raw->silver, com tres tarefas encadeadas
+`gold_dimensions -> gold_fact_trips -> gold_aggregations`:
+
+- **DAB:** `resources/nyc_taxi_gold.job.yml` (deploy com
+  `databricks bundle run nyc_taxi_gold -t dev`).
+- **Jobs API:** `jobs/nyc_taxi_gold.json`.
+
+Rode-o **apos** o pipeline principal ter populado a camada silver.
 
 ## Decisoes tecnicas
 
