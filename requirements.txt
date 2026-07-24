@@ -1,0 +1,11 @@
+# Dependencias do projeto.
+#
+# No Databricks Community Edition, pyspark/delta ja vem no runtime.
+# Este arquivo cobre execucao local e/ou libs extras usadas nos notebooks.
+
+requests>=2.31.0
+pyspark>=3.4.0
+delta-spark>=2.4.0
+pandas>=1.5.0
+matplotlib>=3.6.0
+pyarrow>=12.0.0

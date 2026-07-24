@@ -1,0 +1,4 @@
+# Dependencias para desenvolvimento / testes unitarios locais e no CI.
+-r requirements.txt
+
+pytest>=7.4.0

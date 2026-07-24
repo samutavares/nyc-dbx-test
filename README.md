@@ -1,0 +1,307 @@
+# Prova Teste - NYC Taxi Trips
+
+Solucao de engenharia de dados para ingerir, disponibilizar e analisar os
+dados de corridas de taxi de Nova York (NYC TLC), referentes a
+**Janeiro a Maio de 2023**.
+
+O projeto segue uma **arquitetura medallion** (landing/raw -> bronze ->
+silver -> analise), usando **PySpark**, tabelas **Delta** e **Unity Catalog**
+(namespace de tres niveis `catalog.schema.table`) como camada de consumo
+consultavel via SQL.
+
+> **Alvo: Databricks Free Edition.** A Free Edition (que substituiu a Community
+> Edition, aposentada no fim de 2025) ja vem com **Unity Catalog** e **compute
+> serverless**. Os notebooks criam o catalogo, os schemas e um **Volume** de
+> landing automaticamente (`CREATE CATALOG/SCHEMA/VOLUME IF NOT EXISTS`).
+
+## Arquitetura
+
+```
+                 CloudFront (NYC TLC)                Databricks Free Edition (UC + serverless)
+   https://d37ci6vzurychx.cloudfront.net/trip-data
+                        |
+                        | (1) raw_ingestion.py  -> streaming dos Parquet mensais
+                        v
+        [ Landing Zone ] /Volumes/nyc_taxi/raw/landing/*.parquet     (UC Volume, originais)
+                        |
+                        | (2) bronze/template.py -> replica exata (todas as colunas)
+                        v
+        [ Bronze ] Delta table nyc_taxi.bronze.<taxi_type>_trips      (replica tipada)
+                        |
+                        | (3) silver_trips.py   -> PySpark: selecao/tipagem/limpeza
+                        v
+        [ Consumo/Silver ] Delta table nyc_taxi.silver.trips          (consultavel via SQL)
+                        |
+                        | (4) business_questions.py -> respostas do case
+                        v
+                   Analises / Graficos
+```
+
+O encadeamento das etapas pode ser feito de duas formas:
+
+- **Interativo:** notebook orquestrador `src/run_pipeline.py`
+  (`dbutils.notebook.run`), que executa raw -> bronze -> silver -> analise.
+- **Declarativo (recomendado):** job serverless multi-task implantado via
+  **DAB** (`databricks.yml`) ou pela Jobs API (`jobs/nyc_taxi_pipeline.json`),
+  com dependencias entre tarefas.
+
+### Por que essa abordagem para obter os dados
+A NYC TLC nao expoe mais uma API de filtragem: publica **arquivos Parquet
+mensais estaticos** em um CDN (CloudFront) com URL previsivel:
+
+```
+https://d37ci6vzurychx.cloudfront.net/trip-data/{taxi_type}_tripdata_{YYYY}-{MM}.parquet
+```
+
+Logo, a forma mais pragmatica e robusta e **parametrizar** o tipo de taxi e o
+intervalo de datas, montar a URL e baixar o binario (sem scraping de HTML e
+sem autenticacao). Parquet ja e colunar e tipado, sendo o formato ideal para
+a landing zone e para o PySpark.
+
+## Estrutura do repositorio
+
+```
+Projetotaxinyc/
++- src/
+|  +- raw_ingestion.py       # (1) download parametrizado -> landing zone (UC Volume)
+|  +- bronze/
+|  |  +- template.py         # (2) template: replica exata em Delta (por taxi_type)
+|  +- silver_trips.py        # (3) PySpark: limpeza + tabela Delta de consumo
+|  +- run_pipeline.py        # orquestrador interativo (dbutils.notebook.run)
+|  +- lib/
+|     +- transforms.py       # logica pura das tabelas (testavel via pytest)
++- analysis/
+|  +- business_questions.py  # (4) respostas das 2 perguntas do case
++- tests/
+|  +- conftest.py            # fixture de SparkSession local
+|  +- test_utils.py          # testes de month_list / detect_pickup_col
+|  +- test_bronze.py         # testes da tabela bronze
+|  +- test_silver.py         # testes da tabela silver
++- jobs/
+|  +- nyc_taxi_pipeline.json # job serverless multi-task (Databricks Jobs API 2.1)
++- resources/
+|  +- nyc_taxi_pipeline.job.yml # definicao do job para DAB
++- .github/
+|  +- workflows/
+|     +- deploy.yml          # CI/CD: testes + deploy do bundle (GitHub Actions)
++- databricks.yml            # Databricks Asset Bundle (deploy dos jobs)
++- .gitignore
++- README.md
++- requirements.txt          # dependencias de runtime
++- requirements-dev.txt      # dependencias de dev/testes (pytest)
+```
+
+## Camadas (medallion) e Unity Catalog
+
+Tudo vive sob o catalogo **`nyc_taxi`**, organizado em schemas por camada:
+
+| Camada   | Objeto Unity Catalog                    | Descricao                              |
+|----------|-----------------------------------------|----------------------------------------|
+| raw      | `nyc_taxi.raw.landing` (Volume)         | arquivos Parquet originais (landing)   |
+| bronze   | `nyc_taxi.bronze.<taxi_type>_trips`     | replica exata em Delta (todas colunas) |
+| silver   | `nyc_taxi.silver.trips`                 | consumo: colunas obrigatorias, limpas  |
+| analysis | consultas sobre `nyc_taxi.silver.trips` | respostas das perguntas de negocio     |
+
+- A landing zone e um **Unity Catalog Volume** (`/Volumes/nyc_taxi/raw/landing`),
+  o armazenamento governado recomendado na Free Edition.
+- **bronze** preserva todas as colunas, adicionando apenas `dt_ingestion` e
+  colunas de particao; implementada como **template** parametrizado por
+  `taxi_type` (uma tabela por tipo de taxi).
+- Os notebooks criam catalogo, schema e volume com
+  `CREATE CATALOG / SCHEMA / VOLUME IF NOT EXISTS`.
+
+## Colunas garantidas na camada de consumo
+
+Conforme exigido pelo case, a tabela `nyc_taxi.silver.trips` contem:
+
+- `VendorID`
+- `passenger_count`
+- `total_amount`
+- `tpep_pickup_datetime`
+- `tpep_dropoff_datetime`
+
+(colunas de apoio: `pickup_year`, `pickup_month`, usadas para particionamento).
+
+## Como executar (Databricks Free Edition)
+
+1. Crie uma conta gratuita da **Databricks Free Edition**
+   (https://www.databricks.com/learn/free-edition). Ela ja inclui Unity Catalog
+   e compute serverless - nada a configurar.
+2. Importe os arquivos de `src/` e `analysis/` como notebooks
+   (`Workspace -> Import`). Arquivos `.py` com o cabecalho
+   `# Databricks notebook source` sao importados como notebooks. Mantenha a
+   mesma estrutura de pastas (`raw_ingestion`, `bronze/template`,
+   `silver_trips`, `run_pipeline` e `../analysis/business_questions`), pois o
+   orquestrador usa caminhos relativos.
+3. **Opcao A (recomendada) - rodar tudo:** abra `src/run_pipeline.py`, ajuste
+   os widgets e execute. Ele encadeia raw -> bronze -> silver -> analise e cria
+   o catalogo, os schemas e o Volume automaticamente.
+4. **Opcao B - passo a passo:**
+   - `src/raw_ingestion.py` -> cria o Volume e baixa os Parquet para a landing.
+   - `src/bronze/template.py` -> cria `nyc_taxi.bronze.<taxi_type>_trips`.
+   - `src/silver_trips.py` -> cria `nyc_taxi.silver.trips`.
+   - `analysis/business_questions.py` -> respostas das perguntas.
+
+> **Nota:** o catalogo padrao da Free Edition e `workspace`. Este projeto cria
+> um catalogo dedicado `nyc_taxi`; se preferir usar o `workspace`, basta ajustar
+> o widget `catalog` (ou usar `workspace` e schemas `nyc_taxi_bronze`, etc.).
+
+### Parametros (widgets)
+
+`src/raw_ingestion.py`
+
+| Widget       | Exemplo      | Descricao                          |
+|--------------|--------------|------------------------------------|
+| `taxi_type`  | `yellow`     | yellow / green / fhv / fhvhv       |
+| `date_start` | `2023-01-01` | primeiro mes a ingerir             |
+| `date_stop`  | `2023-05-01` | ultimo mes a ingerir               |
+| `catalog`    | `nyc_taxi`   | catalogo (Unity Catalog)           |
+| `raw_schema` | `raw`        | schema da landing                  |
+| `volume`     | `landing`    | volume da landing (`/Volumes/...`) |
+
+`src/bronze/template.py`
+
+| Widget      | Exemplo                        | Descricao                        |
+|-------------|--------------------------------|----------------------------------|
+| `taxi_type` | `yellow`                       | tipo (define a tabela destino)   |
+| `date_start`| `2023-01-01`                   | primeiro mes                     |
+| `date_stop` | `2023-05-01`                   | ultimo mes                       |
+| `raw_path`  | `/Volumes/nyc_taxi/raw/landing`| landing (Volume) de origem       |
+| `catalog`   | `nyc_taxi`                     | catalogo (Unity Catalog)         |
+| `schema`    | `bronze`                       | schema bronze destino            |
+
+`src/silver_trips.py`
+
+| Widget          | Exemplo        | Descricao                        |
+|-----------------|----------------|----------------------------------|
+| `catalog`       | `nyc_taxi`     | catalogo (Unity Catalog)         |
+| `source_schema` | `bronze`       | schema bronze de origem          |
+| `source_table`  | `yellow_trips` | tabela bronze de origem          |
+| `target_schema` | `silver`       | schema silver destino            |
+| `table`         | `trips`        | tabela destino                   |
+
+`analysis/business_questions.py`
+
+| Widget    | Exemplo    | Descricao                |
+|-----------|------------|--------------------------|
+| `catalog` | `nyc_taxi` | catalogo (Unity Catalog) |
+| `schema`  | `silver`   | schema                   |
+| `table`   | `trips`    | tabela de consumo        |
+
+> Para fazer **backfill** de outro periodo ou tipo de taxi, basta alterar os
+> widgets `taxi_type` / `date_start` / `date_stop` e reexecutar. A ingestao e
+> idempotente (arquivos ja baixados sao pulados).
+
+## Orquestracao via Job (serverless)
+
+`jobs/nyc_taxi_pipeline.json` define um job **MULTI_TASK** (Databricks Jobs
+API 2.1) com 4 tarefas encadeadas por `depends_on`:
+`raw_ingestion -> bronze_yellow -> silver_trips -> analysis`. Nao ha
+`job_clusters`: na Free Edition as tarefas rodam em **compute serverless**.
+
+Para importar (via Databricks CLI):
+
+```bash
+# ajuste git_url no JSON e configure a Databricks CLI antes
+databricks jobs create --json-file jobs/nyc_taxi_pipeline.json
+```
+
+## Deploy com Databricks Asset Bundles (DAB)
+
+A Free Edition suporta **DAB**, a forma recomendada de versionar e implantar o
+job de forma declarativa. A configuracao esta em `databricks.yml` (bundle +
+targets) e a definicao do job em `resources/nyc_taxi_pipeline.job.yml`. O
+bundle sincroniza os notebooks e cria o job serverless no workspace.
+
+```bash
+# 1. instale a Databricks CLI (>= 0.205) e autentique
+databricks configure            # ou: export DATABRICKS_HOST / DATABRICKS_TOKEN
+
+# 2. valide, implante e rode
+databricks bundle validate
+databricks bundle deploy -t dev
+databricks bundle run nyc_taxi_pipeline -t dev
+```
+
+O `host` e o token vem das variaveis de ambiente `DATABRICKS_HOST` /
+`DATABRICKS_TOKEN` (nao ficam fixos no `databricks.yml`). Localmente, rode
+`databricks configure` ou exporte essas variaveis.
+
+## Testes unitarios
+
+A logica de transformacao de cada tabela vive em `src/lib/transforms.py`
+(funcoes puras, sem `dbutils`/`spark` globais). Os notebooks importam essas
+funcoes, entao os testes validam **exatamente** o codigo que roda em producao.
+
+Cobertura por tabela (`tests/`):
+
+- **bronze** (`test_bronze.py`): dedup de linhas identicas, preservacao de
+  todas as colunas originais, metadado `dt_ingestion`, derivacao de
+  `pickup_year`/`pickup_month` e suporte a diferentes colunas de pickup
+  (yellow/green).
+- **silver** (`test_silver.py`): presenca das colunas obrigatorias, tipagem,
+  filtro de linhas invalidas (valor negativo, `dropoff < pickup`, datas nulas
+  ou fora do periodo) e descarte de colunas extras.
+- **utils** (`test_utils.py`): `month_list` e `detect_pickup_col`.
+
+Rodar localmente (requer Java 11+ para o Spark local):
+
+```bash
+pip install -r requirements-dev.txt
+pytest tests -v
+```
+
+## CI/CD (GitHub Actions)
+
+O workflow `.github/workflows/deploy.yml` tem dois jobs:
+
+1. **test** - roda `pytest` (com PySpark) em cada push e pull request.
+2. **deploy** - so executa **apos os testes passarem** (`needs: test`), em push
+   na `main` ou disparo manual: instala a Databricks CLI, valida e implanta o
+   bundle. Nao roda em pull requests.
+
+Configure os **secrets do repositorio** (Settings -> Secrets and variables ->
+Actions):
+
+| Secret             | Valor                                              |
+|--------------------|----------------------------------------------------|
+| `DATABRICKS_HOST`  | URL do workspace (ex.: `https://dbc-xxxx.cloud.databricks.com`) |
+| `DATABRICKS_TOKEN` | Personal Access Token (ou token de service principal)          |
+
+O workflow os injeta como variaveis de ambiente, entao a CLI autentica sem
+credenciais no codigo. Para tambem **executar** o job apos o deploy, dispare o
+workflow manualmente (aba Actions -> Run workflow) marcando `run_pipeline`.
+
+> Dica: um **token de service principal** e preferivel a um PAT pessoal para
+> CI. Alternativamente, a Databricks recomenda **OIDC** (sem token), definindo
+> `DATABRICKS_AUTH_TYPE=github-oidc` + `DATABRICKS_CLIENT_ID` no lugar do token.
+
+## Perguntas respondidas (analysis/)
+
+1. **Media de `total_amount` por mes (todos os yellow taxis).**
+   Agregacao por `pickup_year, pickup_month` com `AVG(total_amount)`
+   (mais uma visao geral do periodo).
+2. **Media de `passenger_count` por hora do dia em Maio (todos os taxis).**
+   Agregacao por `HOUR(tpep_pickup_datetime)` filtrando `pickup_month = 5`,
+   com grafico de barras.
+
+## Decisoes tecnicas
+
+- **Databricks Free Edition** como alvo: substituta da Community Edition
+  (aposentada no fim de 2025), ja traz Unity Catalog e serverless de graca.
+- **Landing zone em UC Volume** (`/Volumes/nyc_taxi/raw/landing`) em vez de
+  DBFS: e o armazenamento governado recomendado, acessivel tanto pela API
+  POSIX (download) quanto pelo Spark (leitura).
+- **Camada bronze como replica exata** (todas as colunas), isolando a origem
+  da modelagem analitica feita em silver.
+- **Bronze como template** parametrizado por `taxi_type`: o mesmo notebook
+  atende yellow/green/fhv/fhvhv.
+- **Unity Catalog** (namespace `catalog.schema.table`) como camada de
+  metadados/governanca: o catalogo `nyc_taxi` separa as camadas em schemas
+  (`raw`, `bronze`, `silver`), criados via `CREATE CATALOG/SCHEMA/VOLUME`.
+- **Compute serverless** nos jobs (sem `job_clusters`), alinhado a Free Edition.
+- **Delta Lake** como formato das camadas: transacional, com schema
+  enforcement e otimo suporte a SQL.
+- **PySpark** usado nas etapas bronze e silver (requisito do case).
+- **Parametrizacao via widgets**, permitindo reprocessamento/backfill sem
+  alterar codigo.
