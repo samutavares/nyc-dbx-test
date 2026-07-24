@@ -399,6 +399,7 @@ erDiagram
         int       payment_type_key FK
         int       service_type_key FK
         int       hvfhs_license_key FK
+        bigint    vendor_id
         timestamp pickup_datetime
         timestamp dropoff_datetime
         double    trip_distance
@@ -465,8 +466,21 @@ erDiagram
   `trip_distance`, `trip_duration_min` (derivada de dropoff - pickup),
   `passenger_count`, `fare_amount`, `tip_amount`, `tolls_amount`, `total_amount`,
   `is_airport_trip`. Guarda as **chaves substitutas** (FK) para cada dimensao.
-  Colunas sem correspondencia num tipo (ex.: `passenger_count` no fhv/fhvhv)
-  ficam `NULL`.
+  Tambem mantem `vendor_id` como **atributo degenerado** (alem da FK
+  `vendor_key`). Colunas sem correspondencia num tipo (ex.: `passenger_count` no
+  fhv/fhvhv) ficam `NULL`.
+
+#### Colunas obrigatorias da camada de consumo (contrato)
+
+O case exige que a camada de consumo **garanta** a presenca de **VendorID,
+passenger_count, total_amount, tpep_pickup_datetime e tpep_dropoff_datetime**.
+No modelo conformado da gold esses campos existem em `gold.fact_trips` como
+`vendor_id`, `passenger_count`, `total_amount`, `pickup_datetime` e
+`dropoff_datetime` (o prefixo `tpep_` e especifico do yellow e nao generaliza
+para os demais tipos). Para tornar isso um **contrato verificavel**, o
+`fact_trips.sql` tem uma celula final que consulta o `information_schema` e
+**falha o job** (via `raise_error`) caso qualquer uma dessas colunas esteja
+ausente. As demais colunas sao opcionais.
 
 ### Dimensoes conformadas
 

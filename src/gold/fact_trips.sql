@@ -122,6 +122,9 @@ SELECT
   COALESCE(p.payment_type_key, 0)                            AS payment_type_key,
   COALESCE(l.hvfhs_license_key, 0)                           AS hvfhs_license_key,
   st.service_type_key,
+  -- VendorID como atributo degenerado: o case exige VendorID na camada de
+  -- consumo (alem da FK vendor_key -> dim_vendor). NULL para fhv/fhvhv.
+  u.vendor_id,
   u.pickup_datetime,
   u.dropoff_datetime,
   u.trip_distance,
@@ -140,6 +143,43 @@ LEFT JOIN nyc_taxi.gold.dim_rate_code    r   ON CAST(u.ratecode_id AS INT)   = r
 LEFT JOIN nyc_taxi.gold.dim_payment_type p   ON CAST(u.payment_type AS INT)  = p.payment_type_key
 LEFT JOIN nyc_taxi.gold.dim_hvfhs_license l  ON u.hvfhs_license_num  = l.hvfhs_license_num
 JOIN      nyc_taxi.gold.dim_service_type st  ON u.service_type       = st.service_type;
+
+-- COMMAND ----------
+
+-- DBTITLE 1,Contrato de consumo: garante colunas OBRIGATORIAS (case)
+-- MAGIC %md
+-- MAGIC O case exige que a camada de consumo garanta a presenca de **VendorID,
+-- MAGIC passenger_count, total_amount, tpep_pickup_datetime e
+-- MAGIC tpep_dropoff_datetime**. No modelo conformado da gold esses campos sao
+-- MAGIC `vendor_id`, `passenger_count`, `total_amount`, `pickup_datetime` e
+-- MAGIC `dropoff_datetime` (o prefixo `tpep_` e especifico do yellow). A celula
+-- MAGIC abaixo **falha o job** (`raise_error`) se alguma dessas colunas nao
+-- MAGIC existir em `nyc_taxi.gold.fact_trips`.
+
+-- COMMAND ----------
+
+WITH required(col) AS (
+  VALUES ('vendor_id'), ('passenger_count'), ('total_amount'),
+         ('pickup_datetime'), ('dropoff_datetime')
+),
+present AS (
+  SELECT lower(column_name) AS col
+  FROM nyc_taxi.information_schema.columns
+  WHERE table_schema = 'gold' AND table_name = 'fact_trips'
+),
+missing AS (
+  SELECT col FROM required
+  EXCEPT
+  SELECT col FROM present
+)
+SELECT
+  CASE
+    WHEN (SELECT count(*) FROM missing) > 0
+      THEN raise_error(concat(
+        'Contrato de consumo violado: colunas obrigatorias ausentes em fact_trips -> ',
+        (SELECT concat_ws(', ', sort_array(collect_list(col))) FROM missing)))
+    ELSE 'Contrato de consumo OK: VendorID, passenger_count, total_amount, pickup_datetime e dropoff_datetime presentes.'
+  END AS consumption_contract;
 
 -- COMMAND ----------
 
