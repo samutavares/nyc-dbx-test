@@ -1,0 +1,14 @@
+resources:
+  dashboards:
+    nyc_taxi_dashboard:
+      display_name: "Análise dos táxis de NY"
+
+      # Arquivo .lvdash.json (Lakeview) versionado junto ao bundle. O caminho e
+      # relativo a este arquivo YAML.
+      file_path: ./nyc_taxi_dashboard.lvdash.json
+
+      # warehouse_id vem de uma variavel do bundle (nao fica fixo, pois muda por
+      # workspace). No CI e injetado via BUNDLE_VAR_warehouse_id a partir do
+      # secret DATABRICKS_WAREHOUSE_ID. Localmente:
+      #   databricks bundle deploy -t dev --var="warehouse_id=<id>"
+      warehouse_id: ${var.warehouse_id}

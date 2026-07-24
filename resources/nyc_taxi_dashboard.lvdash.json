@@ -1,0 +1,648 @@
+{
+  "datasets": [
+    {
+      "name": "d1d90e67",
+      "displayName": "Conjunto de dados sem título",
+      "queryLines": [
+        "-- Calculate % of airport trips per service_type\r\n",
+        "SELECT\r\n",
+        "  t2.description,\r\n",
+        "  COUNT(*) AS airport_trip_count,\r\n",
+        "  ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) AS airport_trip_pct\r\n",
+        "FROM nyc_taxi.gold.fact_trips t1\r\n",
+        "join nyc_taxi.gold.dim_service_type t2 on t1.service_type_key=t2.service_type_key\r\n",
+        "WHERE is_airport_trip = true\r\n",
+        "GROUP BY t2.description\r\n",
+        "ORDER BY airport_trip_pct DESC"
+      ]
+    },
+    {
+      "name": "0644ec20",
+      "displayName": "Conjunto de dados sem título 1",
+      "queryLines": [
+        ""
+      ]
+    },
+    {
+      "name": "67929165",
+      "displayName": "agg_trips_by_hour",
+      "config": {
+        "version": "1.1",
+        "source": "nyc_taxi.gold.agg_trips_by_hour",
+        "dimensions": [
+          {
+            "expr": "source.*"
+          }
+        ],
+        "measures": [
+          {
+            "name": "count",
+            "expr": "COUNT(*)",
+            "comment": "Representa o número total de linhas no conjunto de dados. Use essa medida para contar todos",
+            "displayName": "Contagem"
+          }
+        ]
+      }
+    },
+    {
+      "name": "50e7a3bf",
+      "displayName": "agg_revenue_monthly",
+      "config": {
+        "version": "1.1",
+        "source": "nyc_taxi.gold.agg_revenue_monthly",
+        "dimensions": [
+          {
+            "expr": "source.*"
+          }
+        ],
+        "measures": [
+          {
+            "name": "count",
+            "expr": "COUNT(*)",
+            "comment": "Representa o número total de linhas no conjunto de dados. Use essa medida para contar todos",
+            "displayName": "Contagem"
+          }
+        ]
+      }
+    },
+    {
+      "name": "985f3e7e",
+      "displayName": "dim_zone",
+      "config": {
+        "version": "1.1",
+        "source": "nyc_taxi.gold.dim_zone",
+        "dimensions": [
+          {
+            "expr": "source.*"
+          }
+        ],
+        "measures": [
+          {
+            "name": "count",
+            "expr": "COUNT(*)",
+            "comment": "Representa o número total de linhas no conjunto de dados. Use essa medida para contar todos",
+            "displayName": "Contagem"
+          }
+        ]
+      }
+    },
+    {
+      "name": "hourly_service_trips",
+      "displayName": "Hourly Trips by Service Type",
+      "queryLines": [
+        "SELECT\n",
+        "  t2.description AS service_type,\n",
+        "  HOUR(t1.pickup_datetime) AS pickup_hour,\n",
+        "  COUNT(*) AS trip_count\n",
+        "FROM\n",
+        "  nyc_taxi.gold.fact_trips t1\n",
+        "    JOIN nyc_taxi.gold.dim_service_type t2\n",
+        "      ON t1.service_type_key = t2.service_type_key\n",
+        "GROUP BY\n",
+        "  t2.description,\n",
+        "  HOUR(t1.pickup_datetime)\n",
+        "ORDER BY\n",
+        "  t2.description,\n",
+        "  trip_count DESC"
+      ]
+    },
+    {
+      "name": "549b9203",
+      "displayName": "fact_trips",
+      "config": {
+        "version": "1.1",
+        "source": "nyc_taxi.gold.fact_trips",
+        "dimensions": [
+          {
+            "expr": "source.*"
+          }
+        ],
+        "measures": [
+          {
+            "name": "count",
+            "expr": "COUNT(*)",
+            "comment": "Representa o número total de linhas no conjunto de dados. Use essa medida para contar todos",
+            "displayName": "Contagem"
+          }
+        ]
+      }
+    },
+    {
+      "name": "trips_by_zone",
+      "displayName": "Trips by Zone",
+      "queryLines": [
+        "SELECT\n",
+        "  z.zone,\n",
+        "  z.borough,\n",
+        "  COUNT(*) AS trip_count,\n",
+        "  ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) AS trip_pct\n",
+        "FROM\n",
+        "  nyc_taxi.gold.fact_trips t\n",
+        "    JOIN nyc_taxi.gold.dim_zone z\n",
+        "      ON t.pickup_zone_key = z.zone_key\n",
+        "GROUP BY\n",
+        "  z.zone,\n",
+        "  z.borough\n",
+        "ORDER BY\n",
+        "  trip_count DESC"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "f0499a13",
+      "displayName": "Corridas no Aeroporto por tipo de serviço",
+      "layout": [
+        {
+          "widget": {
+            "name": "airport_pct_bar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "d1d90e67",
+                  "fields": [
+                    {
+                      "name": "description",
+                      "expression": "`description`"
+                    },
+                    {
+                      "name": "sum(airport_trip_pct)",
+                      "expression": "SUM(`airport_trip_pct`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Airport Trips by Service Type",
+                "showTitle": true
+              },
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "description",
+                  "displayName": "description",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "sum(airport_trip_pct)",
+                  "displayName": "airport_trip_pct",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "description",
+                  "displayName": "description",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "airport_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "d1d90e67",
+                  "fields": [
+                    {
+                      "name": "description",
+                      "expression": "`description`"
+                    },
+                    {
+                      "name": "airport_trip_count",
+                      "expression": "`airport_trip_count`"
+                    },
+                    {
+                      "name": "airport_trip_pct",
+                      "expression": "`airport_trip_pct`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Airport Trip Details",
+                "showTitle": true
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "description"
+                  },
+                  {
+                    "fieldName": "airport_trip_count"
+                  },
+                  {
+                    "fieldName": "airport_trip_pct"
+                  }
+                ]
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 0,
+            "width": 6,
+            "height": 8
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "hourly_analysis",
+      "displayName": "Padrões de hora por tipo de serviço",
+      "layout": [
+        {
+          "widget": {
+            "name": "hourly_bar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "hourly_service_trips",
+                  "fields": [
+                    {
+                      "name": "pickup_hour",
+                      "expression": "`pickup_hour`"
+                    },
+                    {
+                      "name": "sum(trip_count)",
+                      "expression": "SUM(`trip_count`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Trip Volume by Hour and Service Type",
+                "showTitle": true
+              },
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "pickup_hour",
+                  "displayName": "pickup_hour",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "sum(trip_count)",
+                  "displayName": "trip_count",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "pickup_hour",
+                  "displayName": "pickup_hour",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 0,
+            "width": 9,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "hourly_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "hourly_service_trips",
+                  "fields": [
+                    {
+                      "name": "service_type",
+                      "expression": "`service_type`"
+                    },
+                    {
+                      "name": "pickup_hour",
+                      "expression": "`pickup_hour`"
+                    },
+                    {
+                      "name": "trip_count",
+                      "expression": "`trip_count`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Top Hours by Service Type",
+                "showTitle": true
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "service_type"
+                  },
+                  {
+                    "fieldName": "pickup_hour"
+                  },
+                  {
+                    "fieldName": "trip_count"
+                  }
+                ]
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 12,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "service_type_filter",
+            "queries": [
+              {
+                "name": "dashboards/01f18750902f1e6da9c2e2b8a4bc884d/datasets/01f18751cf2a14228811517ebc3683d0_service_type",
+                "query": {
+                  "datasetName": "hourly_service_trips",
+                  "fields": [
+                    {
+                      "name": "service_type",
+                      "expression": "`service_type`"
+                    },
+                    {
+                      "name": "service_type_associativity",
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Service Type",
+                "showTitle": true
+              },
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "service_type",
+                    "queryName": "dashboards/01f18750902f1e6da9c2e2b8a4bc884d/datasets/01f18751cf2a14228811517ebc3683d0_service_type"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 3,
+            "height": 4
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "zone_analysis",
+      "displayName": "Trips by Zone",
+      "layout": [
+        {
+          "widget": {
+            "name": "zone_bar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "trips_by_zone",
+                  "fields": [
+                    {
+                      "name": "zone",
+                      "expression": "`zone`"
+                    },
+                    {
+                      "name": "sum(trip_count)",
+                      "expression": "SUM(`trip_count`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Top Pickup Zones",
+                "showTitle": true
+              },
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "zone",
+                  "displayName": "zone",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "sum(trip_count)",
+                  "displayName": "trip_count",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "zone",
+                  "displayName": "zone",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 0,
+            "width": 9,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "zone_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "trips_by_zone",
+                  "fields": [
+                    {
+                      "name": "zone",
+                      "expression": "`zone`"
+                    },
+                    {
+                      "name": "borough",
+                      "expression": "`borough`"
+                    },
+                    {
+                      "name": "trip_count",
+                      "expression": "`trip_count`"
+                    },
+                    {
+                      "name": "trip_pct",
+                      "expression": "`trip_pct`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Zone Trip Details",
+                "showTitle": true
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "zone"
+                  },
+                  {
+                    "fieldName": "borough"
+                  },
+                  {
+                    "fieldName": "trip_count"
+                  },
+                  {
+                    "fieldName": "trip_pct"
+                  }
+                ]
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 12,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "zone_filter",
+            "queries": [
+              {
+                "name": "dashboards/01f18750902f1e6da9c2e2b8a4bc884d/datasets/01f187522fad137587f7b680ded17e0c_zone",
+                "query": {
+                  "datasetName": "trips_by_zone",
+                  "fields": [
+                    {
+                      "name": "zone",
+                      "expression": "`zone`"
+                    },
+                    {
+                      "name": "zone_associativity",
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Zone Filter",
+                "showTitle": true
+              },
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "zone",
+                    "queryName": "dashboards/01f18750902f1e6da9c2e2b8a4bc884d/datasets/01f187522fad137587f7b680ded17e0c_zone"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 3,
+            "height": 5
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "widgetHeaderAlignment": "ALIGNMENT_UNSPECIFIED"
+    },
+    "applyModeEnabled": false
+  }
+}

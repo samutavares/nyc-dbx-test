@@ -6,8 +6,9 @@ name: CI/CD
 #            apos os testes passarem, em push na main ou disparo manual.
 #
 # Auth do deploy por token: configure os secrets do repositorio
-#   - DATABRICKS_HOST   (ex.: https://dbc-xxxx.cloud.databricks.com)
-#   - DATABRICKS_TOKEN  (Personal Access Token / token de service principal)
+#   - DATABRICKS_HOST          (ex.: https://dbc-xxxx.cloud.databricks.com)
+#   - DATABRICKS_TOKEN         (Personal Access Token / token de service principal)
+#   - DATABRICKS_WAREHOUSE_ID  (SQL warehouse que roda as queries do dashboard)
 
 on:
   push:
@@ -54,6 +55,9 @@ jobs:
     env:
       DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      # SQL warehouse que roda as queries do dashboard Lakeview. Preenche a
+      # variavel do bundle `warehouse_id` (${var.warehouse_id}).
+      BUNDLE_VAR_warehouse_id: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

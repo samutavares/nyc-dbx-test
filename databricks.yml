@@ -18,6 +18,20 @@ bundle:
 include:
   - resources/*.yml
 
+# Variaveis do bundle. O warehouse_id (SQL warehouse que roda as queries do
+# dashboard) muda por workspace, entao nao fica fixo: no CI e injetado via
+# BUNDLE_VAR_warehouse_id (secret DATABRICKS_WAREHOUSE_ID); localmente use
+# `--var="warehouse_id=<id>"`.
+variables:
+  warehouse_id:
+    description: ID do SQL warehouse usado para executar as queries do dashboard Lakeview.
+
+# O .lvdash.json e implantado pela resource `dashboards` (nao deve ser
+# sincronizado como arquivo bruto no workspace).
+sync:
+  exclude:
+    - resources/*.lvdash.json
+
 targets:
   dev:
     mode: development

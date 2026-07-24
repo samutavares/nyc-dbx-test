@@ -97,8 +97,10 @@ Projetotaxinyc/
 |  +- nyc_taxi_pipeline.json # job raw->silver (Databricks Jobs API 2.1)
 |  +- nyc_taxi_gold.json      # job separado da camada gold (Jobs API 2.1)
 +- resources/
-|  +- nyc_taxi_pipeline.job.yml # job raw->silver para DAB
-|  +- nyc_taxi_gold.job.yml     # job da gold para DAB
+|  +- nyc_taxi_pipeline.job.yml    # job raw->silver para DAB
+|  +- nyc_taxi_gold.job.yml        # job da gold para DAB
+|  +- nyc_taxi_dashboard.dashboard.yml # resource DAB do dashboard Lakeview
+|  +- nyc_taxi_dashboard.lvdash.json   # definicao do dashboard (Lakeview)
 +- .github/
 |  +- workflows/
 |     +- deploy.yml          # CI/CD: testes + deploy do bundle (GitHub Actions)
@@ -316,6 +318,33 @@ O `host` e o token vem das variaveis de ambiente `DATABRICKS_HOST` /
 `DATABRICKS_TOKEN` (nao ficam fixos no `databricks.yml`). Localmente, rode
 `databricks configure` ou exporte essas variaveis.
 
+## Dashboard (Lakeview) via DAB
+
+O dashboard de analise (`An?lise dos t?xis de NY`) e versionado no repositorio e
+implantado **junto com o bundle**. Os arquivos:
+
+- `resources/nyc_taxi_dashboard.lvdash.json` - definicao do dashboard Lakeview
+  (exportada do Databricks). Consulta as tabelas `nyc_taxi.gold.*`
+  (aeroporto por tipo de servico, corridas por hora e por zona).
+- `resources/nyc_taxi_dashboard.dashboard.yml` - resource DAB (`dashboards`) que
+  aponta para o `.lvdash.json` e usa o warehouse `${var.warehouse_id}`.
+
+Como o dashboard executa queries num **SQL warehouse**, o `databricks.yml`
+declara a variavel `warehouse_id`. Ela **nao fica fixa** (muda por workspace):
+
+- **CI:** injetada via `BUNDLE_VAR_warehouse_id`, a partir do secret
+  `DATABRICKS_WAREHOUSE_ID` (ver secao CI/CD).
+- **Local:** passe `--var`:
+
+```bash
+databricks bundle deploy -t dev --var="warehouse_id=<sql_warehouse_id>"
+```
+
+> O `.lvdash.json` e implantado **apenas** pela resource `dashboards`; o
+> `sync.exclude` no `databricks.yml` evita que ele tambem seja sincronizado como
+> arquivo bruto no workspace. Para trazer alteracoes feitas na UI de volta ao
+> repositorio, use `databricks bundle generate dashboard --resource nyc_taxi_dashboard`.
+
 ## Testes unitarios
 
 A logica de transformacao de cada tabela vive em `src/lib/transforms.py`
@@ -363,10 +392,11 @@ O workflow `.github/workflows/deploy.yml` tem dois jobs:
 Configure os **secrets do repositorio** (Settings -> Secrets and variables ->
 Actions):
 
-| Secret             | Valor                                              |
-|--------------------|----------------------------------------------------|
-| `DATABRICKS_HOST`  | URL do workspace (ex.: `https://dbc-xxxx.cloud.databricks.com`) |
-| `DATABRICKS_TOKEN` | Personal Access Token (ou token de service principal)          |
+| Secret                    | Valor                                              |
+|---------------------------|----------------------------------------------------|
+| `DATABRICKS_HOST`         | URL do workspace (ex.: `https://dbc-xxxx.cloud.databricks.com`) |
+| `DATABRICKS_TOKEN`        | Personal Access Token (ou token de service principal)          |
+| `DATABRICKS_WAREHOUSE_ID` | ID do SQL warehouse que roda as queries do dashboard Lakeview  |
 
 O workflow os injeta como variaveis de ambiente, entao a CLI autentica sem
 credenciais no codigo. Para tambem **executar** o job apos o deploy, dispare o
@@ -581,7 +611,7 @@ Rode-o **apos** o pipeline principal ter populado a camada silver.
   tempo disponivel), todas as camadas gravam com `mode("overwrite")` /
   `CREATE OR REPLACE TABLE`, reprocessando a tabela inteira a cada execucao. O
   **ideal** seria uma escrita **incremental por `MERGE`** (upsert Delta /
-  `MERGE INTO`), atualizando apenas as particoes/chaves afetadas ÿ isso **nao
+  `MERGE INTO`), atualizando apenas as particoes/chaves afetadas ? isso **nao
   foi implementado por restricao de tempo**. Os dados ja estao preparados para
   isso (particionamento por `pickup_year`/`pickup_month` no silver e por
   `service_type_key` no fato; chaves de negocio disponiveis).
