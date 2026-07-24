@@ -11,7 +11,7 @@
         },
         "tasks": [
             {
-                "task_key": "raw_ingestion",
+                "task_key": "raw_yellow",
                 "notebook_task": {
                     "notebook_path": "src/raw_ingestion",
                     "source": "GIT",
@@ -27,10 +27,58 @@
                 "timeout_seconds": 0
             },
             {
+                "task_key": "raw_green",
+                "notebook_task": {
+                    "notebook_path": "src/raw_ingestion",
+                    "source": "GIT",
+                    "base_parameters": {
+                        "taxi_type": "green",
+                        "date_start": "2023-01-01",
+                        "date_stop": "2023-05-01",
+                        "catalog": "nyc_taxi",
+                        "raw_schema": "raw",
+                        "volume": "landing"
+                    }
+                },
+                "timeout_seconds": 0
+            },
+            {
+                "task_key": "raw_fhv",
+                "notebook_task": {
+                    "notebook_path": "src/raw_ingestion",
+                    "source": "GIT",
+                    "base_parameters": {
+                        "taxi_type": "fhv",
+                        "date_start": "2023-01-01",
+                        "date_stop": "2023-05-01",
+                        "catalog": "nyc_taxi",
+                        "raw_schema": "raw",
+                        "volume": "landing"
+                    }
+                },
+                "timeout_seconds": 0
+            },
+            {
+                "task_key": "raw_fhvhv",
+                "notebook_task": {
+                    "notebook_path": "src/raw_ingestion",
+                    "source": "GIT",
+                    "base_parameters": {
+                        "taxi_type": "fhvhv",
+                        "date_start": "2023-01-01",
+                        "date_stop": "2023-05-01",
+                        "catalog": "nyc_taxi",
+                        "raw_schema": "raw",
+                        "volume": "landing"
+                    }
+                },
+                "timeout_seconds": 0
+            },
+            {
                 "task_key": "bronze_yellow",
                 "depends_on": [
                     {
-                        "task_key": "raw_ingestion"
+                        "task_key": "raw_yellow"
                     }
                 ],
                 "notebook_task": {
@@ -48,39 +96,171 @@
                 "timeout_seconds": 0
             },
             {
-                "task_key": "silver_trips",
+                "task_key": "bronze_green",
                 "depends_on": [
                     {
-                        "task_key": "bronze_yellow"
+                        "task_key": "raw_green"
                     }
                 ],
                 "notebook_task": {
-                    "notebook_path": "src/silver_trips",
+                    "notebook_path": "src/bronze/template",
                     "source": "GIT",
                     "base_parameters": {
+                        "taxi_type": "green",
+                        "date_start": "2023-01-01",
+                        "date_stop": "2023-05-01",
+                        "raw_path": "/Volumes/nyc_taxi/raw/landing",
                         "catalog": "nyc_taxi",
-                        "source_schema": "bronze",
-                        "source_table": "yellow_trips",
-                        "target_schema": "silver",
-                        "table": "trips"
+                        "schema": "bronze"
                     }
                 },
                 "timeout_seconds": 0
             },
             {
-                "task_key": "analysis",
+                "task_key": "bronze_fhv",
                 "depends_on": [
                     {
-                        "task_key": "silver_trips"
+                        "task_key": "raw_fhv"
                     }
                 ],
                 "notebook_task": {
-                    "notebook_path": "analysis/business_questions",
+                    "notebook_path": "src/bronze/template",
+                    "source": "GIT",
+                    "base_parameters": {
+                        "taxi_type": "fhv",
+                        "date_start": "2023-01-01",
+                        "date_stop": "2023-05-01",
+                        "raw_path": "/Volumes/nyc_taxi/raw/landing",
+                        "catalog": "nyc_taxi",
+                        "schema": "bronze"
+                    }
+                },
+                "timeout_seconds": 0
+            },
+            {
+                "task_key": "bronze_fhvhv",
+                "depends_on": [
+                    {
+                        "task_key": "raw_fhvhv"
+                    }
+                ],
+                "notebook_task": {
+                    "notebook_path": "src/bronze/template",
+                    "source": "GIT",
+                    "base_parameters": {
+                        "taxi_type": "fhvhv",
+                        "date_start": "2023-01-01",
+                        "date_stop": "2023-05-01",
+                        "raw_path": "/Volumes/nyc_taxi/raw/landing",
+                        "catalog": "nyc_taxi",
+                        "schema": "bronze"
+                    }
+                },
+                "timeout_seconds": 0
+            },
+            {
+                "task_key": "zone_lookup",
+                "notebook_task": {
+                    "notebook_path": "src/zone_lookup",
                     "source": "GIT",
                     "base_parameters": {
                         "catalog": "nyc_taxi",
-                        "schema": "silver",
-                        "table": "trips"
+                        "raw_schema": "raw",
+                        "volume": "landing",
+                        "target_schema": "silver",
+                        "table": "taxi_zone_lookup"
+                    }
+                },
+                "timeout_seconds": 0
+            },
+            {
+                "task_key": "silver_yellow",
+                "depends_on": [
+                    {
+                        "task_key": "bronze_yellow"
+                    },
+                    {
+                        "task_key": "zone_lookup"
+                    }
+                ],
+                "notebook_task": {
+                    "notebook_path": "src/silver/template",
+                    "source": "GIT",
+                    "base_parameters": {
+                        "taxi_type": "yellow",
+                        "catalog": "nyc_taxi",
+                        "source_schema": "bronze",
+                        "target_schema": "silver",
+                        "zone_table": "taxi_zone_lookup"
+                    }
+                },
+                "timeout_seconds": 0
+            },
+            {
+                "task_key": "silver_green",
+                "depends_on": [
+                    {
+                        "task_key": "bronze_green"
+                    },
+                    {
+                        "task_key": "zone_lookup"
+                    }
+                ],
+                "notebook_task": {
+                    "notebook_path": "src/silver/template",
+                    "source": "GIT",
+                    "base_parameters": {
+                        "taxi_type": "green",
+                        "catalog": "nyc_taxi",
+                        "source_schema": "bronze",
+                        "target_schema": "silver",
+                        "zone_table": "taxi_zone_lookup"
+                    }
+                },
+                "timeout_seconds": 0
+            },
+            {
+                "task_key": "silver_fhv",
+                "depends_on": [
+                    {
+                        "task_key": "bronze_fhv"
+                    },
+                    {
+                        "task_key": "zone_lookup"
+                    }
+                ],
+                "notebook_task": {
+                    "notebook_path": "src/silver/template",
+                    "source": "GIT",
+                    "base_parameters": {
+                        "taxi_type": "fhv",
+                        "catalog": "nyc_taxi",
+                        "source_schema": "bronze",
+                        "target_schema": "silver",
+                        "zone_table": "taxi_zone_lookup"
+                    }
+                },
+                "timeout_seconds": 0
+            },
+            {
+                "task_key": "silver_fhvhv",
+                "depends_on": [
+                    {
+                        "task_key": "bronze_fhvhv"
+                    },
+                    {
+                        "task_key": "zone_lookup"
+                    }
+                ],
+                "notebook_task": {
+                    "notebook_path": "src/silver/template",
+                    "source": "GIT",
+                    "base_parameters": {
+                        "taxi_type": "fhvhv",
+                        "catalog": "nyc_taxi",
+                        "source_schema": "bronze",
+                        "target_schema": "silver",
+                        "zone_table": "taxi_zone_lookup"
                     }
                 },
                 "timeout_seconds": 0

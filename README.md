@@ -5,9 +5,10 @@ dados de corridas de taxi de Nova York (NYC TLC), referentes a
 **Janeiro a Maio de 2023**.
 
 O projeto segue uma **arquitetura medallion** (landing/raw -> bronze ->
-silver -> analise), usando **PySpark**, tabelas **Delta** e **Unity Catalog**
-(namespace de tres niveis `catalog.schema.table`) como camada de consumo
-consultavel via SQL.
+silver -> gold), usando **PySpark**, tabelas **Delta** e **Unity Catalog**
+(namespace de tres niveis `catalog.schema.table`). O escopo atual entrega ate a
+camada **silver** (padronizada, consultavel via SQL); a **gold** (analise) e o
+proximo passo.
 
 > **Alvo: Databricks Free Edition.** A Free Edition (que substituiu a Community
 > Edition, aposentada no fim de 2025) ja vem com **Unity Catalog** e **compute
@@ -28,19 +29,26 @@ consultavel via SQL.
                         v
         [ Bronze ] Delta table nyc_taxi.bronze.<taxi_type>_trips      (replica tipada)
                         |
-                        | (3) silver_trips.py   -> PySpark: selecao/tipagem/limpeza
+                        | (3) silver/template.py -> snake_case + tipagem + zonas
                         v
-        [ Consumo/Silver ] Delta table nyc_taxi.silver.trips          (consultavel via SQL)
+        [ Silver ] Delta table nyc_taxi.silver.<taxi_type>_trips      (todas as colunas)
                         |
-                        | (4) business_questions.py -> respostas do case
+                        | (4) [gold - a construir depois] analise/agregacao
                         v
-                   Analises / Graficos
+                   Gold / Analises (futuro)
 ```
+
+**Tipos de taxi:** `raw`, `bronze` e `silver` rodam para os **quatro** datasets
+da TLC (`yellow`, `green`, `fhv`, `fhvhv`) - uma tabela por tipo em cada camada.
+O **silver** faz apenas padronizacao leve (snake_case, tipagem, particao,
+enriquecimento de zonas) **mantendo todas as colunas e todas as linhas**;
+selecoes, limpezas e agregacoes de negocio ficam para a camada **gold**, a ser
+construida depois.
 
 O encadeamento das etapas pode ser feito de duas formas:
 
 - **Interativo:** notebook orquestrador `src/run_pipeline.py`
-  (`dbutils.notebook.run`), que executa raw -> bronze -> silver -> analise.
+  (`dbutils.notebook.run`), que executa raw -> bronze -> zone_lookup -> silver.
 - **Declarativo (recomendado):** job serverless multi-task implantado via
   **DAB** (`databricks.yml`) ou pela Jobs API (`jobs/nyc_taxi_pipeline.json`),
   com dependencias entre tarefas.
@@ -66,17 +74,20 @@ Projetotaxinyc/
 |  +- raw_ingestion.py       # (1) download parametrizado -> landing zone (UC Volume)
 |  +- bronze/
 |  |  +- template.py         # (2) template: replica exata em Delta (por taxi_type)
-|  +- silver_trips.py        # (3) PySpark: limpeza + tabela Delta de consumo
+|  +- zone_lookup.py         # (3) carrega taxi_zone_lookup como dimensao Delta
+|  +- silver/
+|  |  +- template.py         # (4) template silver por tipo: snake_case + tipagem + zonas
 |  +- run_pipeline.py        # orquestrador interativo (dbutils.notebook.run)
 |  +- lib/
 |     +- transforms.py       # logica pura das tabelas (testavel via pytest)
+|     +- data_dictionary.py  # descricoes de colunas (TLC) + to_snake_case
 +- analysis/
-|  +- business_questions.py  # (4) respostas das 2 perguntas do case
+|  +- business_questions.py  # base para a futura camada gold (analise)
 +- tests/
 |  +- conftest.py            # fixture de SparkSession local
-|  +- test_utils.py          # testes de month_list / detect_pickup_col
-|  +- test_bronze.py         # testes da tabela bronze
-|  +- test_silver.py         # testes da tabela silver
+|  +- test_utils.py          # testes de month_list / detect_pickup_col / comments
+|  +- test_bronze.py         # testes da tabela bronze + unify_schemas
+|  +- test_silver.py         # testes da tabela silver + enriquecimento de zonas
 +- jobs/
 |  +- nyc_taxi_pipeline.json # job serverless multi-task (Databricks Jobs API 2.1)
 +- resources/
@@ -95,32 +106,60 @@ Projetotaxinyc/
 
 Tudo vive sob o catalogo **`nyc_taxi`**, organizado em schemas por camada:
 
-| Camada   | Objeto Unity Catalog                    | Descricao                              |
-|----------|-----------------------------------------|----------------------------------------|
-| raw      | `nyc_taxi.raw.landing` (Volume)         | arquivos Parquet originais (landing)   |
-| bronze   | `nyc_taxi.bronze.<taxi_type>_trips`     | replica exata em Delta (todas colunas) |
-| silver   | `nyc_taxi.silver.trips`                 | consumo: colunas obrigatorias, limpas  |
-| analysis | consultas sobre `nyc_taxi.silver.trips` | respostas das perguntas de negocio     |
+| Camada   | Objeto Unity Catalog                     | Descricao                                |
+|----------|------------------------------------------|------------------------------------------|
+| raw      | `nyc_taxi.raw.landing` (Volume)          | arquivos Parquet originais (landing)     |
+| bronze   | `nyc_taxi.bronze.<taxi_type>_trips`      | replica exata em Delta (todas colunas)   |
+| silver   | `nyc_taxi.silver.<taxi_type>_trips`      | padronizacao leve, TODAS as colunas      |
+| silver   | `nyc_taxi.silver.taxi_zone_lookup`       | dimensao de zonas (borough/zona/servico) |
+| gold     | _a construir depois_                     | analise/agregacao (perguntas de negocio) |
 
 - A landing zone e um **Unity Catalog Volume** (`/Volumes/nyc_taxi/raw/landing`),
   o armazenamento governado recomendado na Free Edition.
 - **bronze** preserva todas as colunas, adicionando apenas `dt_ingestion` e
   colunas de particao; implementada como **template** parametrizado por
   `taxi_type` (uma tabela por tipo de taxi).
+- **silver** e um **template por tipo** (uma tabela por `taxi_type`) que faz
+  apenas transformacoes leves - converte os nomes para **snake_case**, tipa as
+  colunas de data/hora e zona, deriva particoes e enriquece com zonas -
+  **mantendo todas as colunas e todas as linhas**.
 - Os notebooks criam catalogo, schema e volume com
   `CREATE CATALOG / SCHEMA / VOLUME IF NOT EXISTS`.
+- As colunas de bronze e silver recebem **COMMENT** com as descricoes dos
+  *data dictionaries* da TLC (via `src/lib/data_dictionary.py`), documentando
+  o significado de cada campo no Unity Catalog.
 
-## Colunas garantidas na camada de consumo
+### Dicionario de dados e enriquecimento por zonas
 
-Conforme exigido pelo case, a tabela `nyc_taxi.silver.trips` contem:
+- **Dicionario de dados:** `src/lib/data_dictionary.py` guarda as descricoes de
+  coluna dos data dictionaries oficiais (yellow, green, fhv, hvfhs) e da
+  dimensao de zonas. Os notebooks bronze/silver aplicam essas descricoes como
+  comentario de coluna (`ALTER TABLE ... ALTER COLUMN ... COMMENT ...`).
+- **Zonas (taxi_zone_lookup):** `src/zone_lookup.py` baixa o
+  `taxi_zone_lookup.csv` da TLC e o materializa em
+  `nyc_taxi.silver.taxi_zone_lookup` (colunas em snake_case:
+  `location_id`/`borough`/`zone`/`service_zone`). O silver faz **left join** de
+  `pu_location_id`/`do_location_id` com essa dimensao, adicionando
+  `pickup_borough`/`pickup_zone`/`pickup_service_zone` e os equivalentes de
+  `dropoff_*`, alem da flag `is_airport_trip` (embarque ou desembarque em zona
+  de aeroporto). O left join preserva corridas com zona desconhecida.
 
-- `VendorID`
-- `passenger_count`
-- `total_amount`
-- `tpep_pickup_datetime`
-- `tpep_dropoff_datetime`
+## Camada silver: padronizacao leve
 
-(colunas de apoio: `pickup_year`, `pickup_month`, usadas para particionamento).
+Cada tabela `nyc_taxi.silver.<taxi_type>_trips` e uma versao padronizada da
+bronze correspondente, **mantendo todas as colunas e todas as linhas**. As
+transformacoes leves aplicadas sao:
+
+- **snake_case** em todos os nomes de coluna (ex.: `VendorID`->`vendor_id`,
+  `PULocationID`->`pu_location_id`, `dropOff_datetime`->`drop_off_datetime`);
+- **tipagem** das colunas de data/hora (timestamp) e de zona (int);
+- derivacao de `pickup_year`/`pickup_month` (particao);
+- enriquecimento por zonas (borough/zona + `is_airport_trip`);
+- `COMMENT` em cada coluna com a descricao do data dictionary da TLC.
+
+Nenhuma coluna e descartada e nenhuma linha e filtrada - a selecao das colunas
+exigidas pelo case, a limpeza e as agregacoes de negocio ficam para a camada
+**gold** (a ser construida depois).
 
 ## Como executar (Databricks Free Edition)
 
@@ -131,16 +170,17 @@ Conforme exigido pelo case, a tabela `nyc_taxi.silver.trips` contem:
    (`Workspace -> Import`). Arquivos `.py` com o cabecalho
    `# Databricks notebook source` sao importados como notebooks. Mantenha a
    mesma estrutura de pastas (`raw_ingestion`, `bronze/template`,
-   `silver_trips`, `run_pipeline` e `../analysis/business_questions`), pois o
-   orquestrador usa caminhos relativos.
+   `zone_lookup`, `silver/template`, `run_pipeline`), pois o orquestrador usa
+   caminhos relativos.
 3. **Opcao A (recomendada) - rodar tudo:** abra `src/run_pipeline.py`, ajuste
-   os widgets e execute. Ele encadeia raw -> bronze -> silver -> analise e cria
-   o catalogo, os schemas e o Volume automaticamente.
+   os widgets e execute. Ele encadeia raw -> bronze -> zone_lookup -> silver
+   (para todos os tipos) e cria o catalogo, os schemas e o Volume
+   automaticamente.
 4. **Opcao B - passo a passo:**
    - `src/raw_ingestion.py` -> cria o Volume e baixa os Parquet para a landing.
    - `src/bronze/template.py` -> cria `nyc_taxi.bronze.<taxi_type>_trips`.
-   - `src/silver_trips.py` -> cria `nyc_taxi.silver.trips`.
-   - `analysis/business_questions.py` -> respostas das perguntas.
+   - `src/zone_lookup.py` -> cria `nyc_taxi.silver.taxi_zone_lookup`.
+   - `src/silver/template.py` -> cria `nyc_taxi.silver.<taxi_type>_trips`.
 
 > **Nota:** o catalogo padrao da Free Edition e `workspace`. Este projeto cria
 > um catalogo dedicado `nyc_taxi`; se preferir usar o `workspace`, basta ajustar
@@ -170,34 +210,34 @@ Conforme exigido pelo case, a tabela `nyc_taxi.silver.trips` contem:
 | `catalog`   | `nyc_taxi`                     | catalogo (Unity Catalog)         |
 | `schema`    | `bronze`                       | schema bronze destino            |
 
-`src/silver_trips.py`
+`src/silver/template.py`
 
-| Widget          | Exemplo        | Descricao                        |
-|-----------------|----------------|----------------------------------|
-| `catalog`       | `nyc_taxi`     | catalogo (Unity Catalog)         |
-| `source_schema` | `bronze`       | schema bronze de origem          |
-| `source_table`  | `yellow_trips` | tabela bronze de origem          |
-| `target_schema` | `silver`       | schema silver destino            |
-| `table`         | `trips`        | tabela destino                   |
+| Widget          | Exemplo             | Descricao                          |
+|-----------------|---------------------|------------------------------------|
+| `taxi_type`     | `yellow`            | tipo (define origem e destino)     |
+| `catalog`       | `nyc_taxi`          | catalogo (Unity Catalog)           |
+| `source_schema` | `bronze`            | schema bronze de origem            |
+| `target_schema` | `silver`            | schema silver destino              |
+| `zone_table`    | `taxi_zone_lookup`  | dimensao de zonas para enriquecer  |
 
-`analysis/business_questions.py`
+> A tabela de origem/destino e derivada de `taxi_type`
+> (`<taxi_type>_trips`). A camada **gold** (analise) sera adicionada depois.
 
-| Widget    | Exemplo    | Descricao                |
-|-----------|------------|--------------------------|
-| `catalog` | `nyc_taxi` | catalogo (Unity Catalog) |
-| `schema`  | `silver`   | schema                   |
-| `table`   | `trips`    | tabela de consumo        |
-
-> Para fazer **backfill** de outro periodo ou tipo de taxi, basta alterar os
-> widgets `taxi_type` / `date_start` / `date_stop` e reexecutar. A ingestao e
-> idempotente (arquivos ja baixados sao pulados).
+> Para fazer **backfill** de outro periodo ou tipo, ajuste `date_start` /
+> `date_stop` (e `taxi_type` nos notebooks raw/bronze, ou `taxi_types` no
+> orquestrador `run_pipeline`) e reexecute. A ingestao e idempotente (arquivos
+> ja baixados sao pulados).
 
 ## Orquestracao via Job (serverless)
 
 `jobs/nyc_taxi_pipeline.json` define um job **MULTI_TASK** (Databricks Jobs
-API 2.1) com 4 tarefas encadeadas por `depends_on`:
-`raw_ingestion -> bronze_yellow -> silver_trips -> analysis`. Nao ha
-`job_clusters`: na Free Edition as tarefas rodam em **compute serverless**.
+API 2.1) com 13 tarefas encadeadas por `depends_on`: para cada um dos quatro
+tipos (yellow, green, fhv, fhvhv) um encadeamento
+`raw_<tipo> -> bronze_<tipo> -> silver_<tipo>`, mais uma tarefa `zone_lookup`
+(dimensao de zonas) da qual todos os `silver_<tipo>` dependem. Os raws e o
+`zone_lookup` sao independentes (rodam em paralelo). A camada **gold**
+(analise) sera adicionada depois. Nao ha `job_clusters`: na Free Edition as
+tarefas rodam em **compute serverless**.
 
 Para importar (via Databricks CLI):
 
@@ -237,14 +277,20 @@ Cobertura por tabela (`tests/`):
 
 - **bronze** (`test_bronze.py`): dedup de linhas identicas, preservacao de
   todas as colunas originais, metadado `dt_ingestion`, derivacao de
-  `pickup_year`/`pickup_month` e suporte a diferentes colunas de pickup
-  (yellow/green).
-- **silver** (`test_silver.py`): presenca das colunas obrigatorias, tipagem,
-  filtro de linhas invalidas (valor negativo, `dropoff < pickup`, datas nulas
-  ou fora do periodo) e descarte de colunas extras.
-- **utils** (`test_utils.py`): `month_list` e `detect_pickup_col`.
+  `pickup_year`/`pickup_month`, suporte a diferentes colunas de pickup
+  (yellow/green) e reconciliacao de schema (`unify_schemas`: promocao de tipos
+  e colunas com caixa diferente, ex.: `airport_fee`/`Airport_fee`).
+- **silver** (`test_silver.py`): conversao de **todos** os nomes para
+  snake_case, preservacao de todas as colunas e todas as linhas (sem filtragem),
+  tipagem de data/hora e zona, derivacao das particoes e **enriquecimento por
+  zonas** (join com `taxi_zone_lookup`, flag `is_airport_trip`, left join que
+  preserva zonas desconhecidas), incluindo colunas estilo fhv (`dropOff_datetime`,
+  `PUlocationID`).
+- **utils** (`test_utils.py`): `month_list`, `detect_pickup_col`,
+  `comment_statements` (geracao/escape dos comentarios de coluna) e
+  `to_snake_case`.
 
-Rodar localmente (requer Java 11+ para o Spark local):
+Rodar localmente (requer Java 17+ para o Spark local):
 
 ```bash
 pip install -r requirements-dev.txt
@@ -276,14 +322,20 @@ workflow manualmente (aba Actions -> Run workflow) marcando `run_pipeline`.
 > CI. Alternativamente, a Databricks recomenda **OIDC** (sem token), definindo
 > `DATABRICKS_AUTH_TYPE=github-oidc` + `DATABRICKS_CLIENT_ID` no lugar do token.
 
-## Perguntas respondidas (analysis/)
+## Camada gold / analise (proximo passo)
 
-1. **Media de `total_amount` por mes (todos os yellow taxis).**
-   Agregacao por `pickup_year, pickup_month` com `AVG(total_amount)`
-   (mais uma visao geral do periodo).
-2. **Media de `passenger_count` por hora do dia em Maio (todos os taxis).**
-   Agregacao por `HOUR(tpep_pickup_datetime)` filtrando `pickup_month = 5`,
-   com grafico de barras.
+A analise das perguntas de negocio sera implementada na camada **gold**, a
+partir das tabelas silver. O notebook `analysis/business_questions.py` serve de
+ponto de partida para as duas perguntas do case:
+
+1. **Media de `total_amount` por mes (yellow).**
+   Agregacao por `pickup_year, pickup_month` com `AVG(total_amount)`.
+2. **Media de `passenger_count` por hora do dia em Maio.**
+   Agregacao por `HOUR(pickup_datetime)` filtrando `pickup_month = 5`.
+
+> Observacao: como o silver agora usa **snake_case**, a coluna de embarque do
+> yellow chama-se `tpep_pickup_datetime` (a original, ja em snake_case). O gold
+> deve referenciar os nomes padronizados das tabelas silver.
 
 ## Decisoes tecnicas
 
@@ -293,9 +345,12 @@ workflow manualmente (aba Actions -> Run workflow) marcando `run_pipeline`.
   DBFS: e o armazenamento governado recomendado, acessivel tanto pela API
   POSIX (download) quanto pelo Spark (leitura).
 - **Camada bronze como replica exata** (todas as colunas), isolando a origem
-  da modelagem analitica feita em silver.
-- **Bronze como template** parametrizado por `taxi_type`: o mesmo notebook
-  atende yellow/green/fhv/fhvhv.
+  das transformacoes posteriores.
+- **Bronze e silver como templates** parametrizados por `taxi_type`: o mesmo
+  notebook atende yellow/green/fhv/fhvhv (uma tabela por tipo em cada camada).
+- **Silver como padronizacao leve** (snake_case, tipagem, particao, zonas)
+  mantendo todas as colunas/linhas; selecao, limpeza e agregacao ficam para o
+  **gold**, separando padronizacao de modelagem de negocio.
 - **Unity Catalog** (namespace `catalog.schema.table`) como camada de
   metadados/governanca: o catalogo `nyc_taxi` separa as camadas em schemas
   (`raw`, `bronze`, `silver`), criados via `CREATE CATALOG/SCHEMA/VOLUME`.

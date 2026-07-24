@@ -4,7 +4,7 @@ Este modulo NAO depende de `dbutils`, `spark` ou `display` (globais do
 Databricks): recebe e retorna `DataFrame`s, para poder ser exercitado
 localmente com uma `SparkSession` em testes unitarios (pytest).
 
-Os notebooks (`src/bronze/template.py`, `src/silver_trips.py`,
+Os notebooks (`src/bronze/template.py`, `src/silver/template.py`,
 `src/raw_ingestion.py`) importam estas funcoes, garantindo que os testes
 validem exatamente a mesma logica que roda em producao.
 """
@@ -16,7 +16,9 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
-# Colunas obrigatorias na camada de consumo (exigencia do case).
+from data_dictionary import to_snake_case
+
+# Colunas exigidas pelo case (usadas no gold/analise, nao no silver).
 REQUIRED_COLUMNS = [
     "VendorID",
     "passenger_count",
@@ -27,6 +29,16 @@ REQUIRED_COLUMNS = [
 
 # Nomes possiveis da coluna de pickup, por tipo de taxi.
 PICKUP_COL_CANDIDATES = ["tpep_pickup_datetime", "lpep_pickup_datetime", "pickup_datetime"]
+
+# Candidatos (ja em snake_case, pois o silver primeiro converte tudo para
+# snake_case) usados para detectar as colunas de data/hora e de zona e, entao,
+# aplicar tipagem/particao/enriquecimento. TODAS as colunas sao mantidas.
+PICKUP_DT_CANDIDATES = ["tpep_pickup_datetime", "lpep_pickup_datetime", "pickup_datetime"]
+DROPOFF_DT_CANDIDATES = [
+    "tpep_dropoff_datetime", "lpep_dropoff_datetime", "dropoff_datetime", "drop_off_datetime",
+]
+PU_LOCATION_CANDIDATES = ["pu_location_id"]
+DO_LOCATION_CANDIDATES = ["do_location_id"]
 
 
 def month_list(date_start: str, date_stop: str) -> list:
@@ -155,25 +167,113 @@ def build_bronze(df: DataFrame) -> DataFrame:
     return df
 
 
-def build_silver(df: DataFrame, year: int = 2023, month_start: int = 1, month_stop: int = 5) -> DataFrame:
-    """Silver = camada de consumo: seleciona obrigatorias, tipa, limpa, particiona."""
-    df = (
-        df.select(*REQUIRED_COLUMNS)
-        .withColumn("VendorID", F.col("VendorID").cast("int"))
-        .withColumn("passenger_count", F.col("passenger_count").cast("int"))
-        .withColumn("total_amount", F.col("total_amount").cast("double"))
-        .withColumn("tpep_pickup_datetime", F.col("tpep_pickup_datetime").cast("timestamp"))
-        .withColumn("tpep_dropoff_datetime", F.col("tpep_dropoff_datetime").cast("timestamp"))
-        .withColumn("pickup_year", F.year("tpep_pickup_datetime"))
-        .withColumn("pickup_month", F.month("tpep_pickup_datetime"))
+def _first_present(columns, candidates):
+    """Primeiro nome de `candidates` presente em `columns`, ou None."""
+    return next((c for c in candidates if c in columns), None)
+
+
+def snake_case_columns(df: DataFrame) -> DataFrame:
+    """Renomeia TODAS as colunas do DataFrame para snake_case (sem descartar nada)."""
+    for col in df.columns:
+        new = to_snake_case(col)
+        if new != col:
+            df = df.withColumnRenamed(col, new)
+    return df
+
+
+def standardize_silver(df: DataFrame, zone_df: DataFrame = None) -> DataFrame:
+    """Silver = padronizacao leve, mantendo TODAS as colunas.
+
+    Transformacoes leves (sem descartar colunas nem filtrar linhas - isso fica
+    para o gold):
+      - converte TODOS os nomes de coluna para snake_case;
+      - tipa (cast) as colunas de data/hora (timestamp) e de zona (int);
+      - deriva `pickup_year`/`pickup_month` (particao) a partir do pickup;
+      - se `zone_df` for fornecido, enriquece com borough/zona (colunas extras).
+    """
+    df = snake_case_columns(df)
+
+    pu_dt = _first_present(df.columns, PICKUP_DT_CANDIDATES)
+    do_dt = _first_present(df.columns, DROPOFF_DT_CANDIDATES)
+    if pu_dt:
+        df = df.withColumn(pu_dt, F.col(pu_dt).cast("timestamp"))
+    if do_dt:
+        df = df.withColumn(do_dt, F.col(do_dt).cast("timestamp"))
+    for loc in PU_LOCATION_CANDIDATES + DO_LOCATION_CANDIDATES:
+        if loc in df.columns:
+            df = df.withColumn(loc, F.col(loc).cast("int"))
+
+    if pu_dt:
+        df = (
+            df.withColumn("pickup_year", F.year(F.col(pu_dt)))
+            .withColumn("pickup_month", F.month(F.col(pu_dt)))
+        )
+
+    if zone_df is not None:
+        df = enrich_with_zones(df, zone_df)
+    return df
+
+
+def enrich_with_zones(df: DataFrame, zone_df: DataFrame) -> DataFrame:
+    """Junta os IDs de zona (pu/do) com taxi_zone_lookup para trazer borough/zona.
+
+    Espera colunas ja em snake_case (`pu_location_id`/`do_location_id` no trip e
+    `location_id`/`borough`/`zone`/`service_zone` na dimensao - garantido por
+    snake_case_columns). Usa left join para nao descartar corridas com zona
+    desconhecida e deriva `is_airport_trip` (embarque OU desembarque em zona de
+    aeroporto).
+    """
+    zone_df = snake_case_columns(zone_df)
+    zones = zone_df.select(
+        F.col("location_id").cast("int").alias("_loc_id"),
+        F.col("borough").alias("_borough"),
+        F.col("zone").alias("_zone"),
+        F.col("service_zone").alias("_service_zone"),
     )
 
-    df = df.filter(
-        F.col("tpep_pickup_datetime").isNotNull()
-        & F.col("tpep_dropoff_datetime").isNotNull()
-        & (F.col("tpep_dropoff_datetime") >= F.col("tpep_pickup_datetime"))
-        & (F.col("total_amount") >= 0)
-        & (F.col("pickup_year") == year)
-        & (F.col("pickup_month").between(month_start, month_stop))
-    )
+    if "pu_location_id" in df.columns:
+        pu = zones.select(
+            F.col("_loc_id").alias("pu_location_id"),
+            F.col("_borough").alias("pickup_borough"),
+            F.col("_zone").alias("pickup_zone"),
+            F.col("_service_zone").alias("pickup_service_zone"),
+        )
+        df = df.join(pu, on="pu_location_id", how="left")
+
+    if "do_location_id" in df.columns:
+        do = zones.select(
+            F.col("_loc_id").alias("do_location_id"),
+            F.col("_borough").alias("dropoff_borough"),
+            F.col("_zone").alias("dropoff_zone"),
+            F.col("_service_zone").alias("dropoff_service_zone"),
+        )
+        df = df.join(do, on="do_location_id", how="left")
+
+    has_pu_service = "pickup_service_zone" in df.columns
+    has_do_service = "dropoff_service_zone" in df.columns
+    if has_pu_service or has_do_service:
+        pu_air = (F.col("pickup_service_zone") == "Airports") if has_pu_service else F.lit(False)
+        do_air = (F.col("dropoff_service_zone") == "Airports") if has_do_service else F.lit(False)
+        df = df.withColumn(
+            "is_airport_trip",
+            F.coalesce(pu_air, F.lit(False)) | F.coalesce(do_air, F.lit(False)),
+        )
     return df
+
+
+def comment_statements(full_table: str, comments: dict, existing_columns) -> list:
+    """Gera comandos ALTER TABLE ... ALTER COLUMN ... COMMENT para as colunas.
+
+    Aplica comentario apenas nas colunas que existem na tabela. Escapa aspas
+    simples nas descricoes. Retorna a lista de SQLs (executados no notebook).
+    """
+    existing = set(existing_columns)
+    statements = []
+    for column, description in comments.items():
+        if column not in existing:
+            continue
+        safe = description.replace("'", "''")
+        statements.append(
+            f"ALTER TABLE {full_table} ALTER COLUMN {column} COMMENT '{safe}'"
+        )
+    return statements

@@ -1,6 +1,7 @@
 """Testes das funcoes utilitarias puras (sem Spark)."""
 
-from transforms import detect_pickup_col, month_list
+from data_dictionary import to_snake_case
+from transforms import comment_statements, detect_pickup_col, month_list
 
 
 def test_month_list_case_window():
@@ -36,3 +37,33 @@ def test_detect_pickup_col_green():
 
 def test_detect_pickup_col_absent():
     assert detect_pickup_col(["a", "b", "c"]) is None
+
+
+def test_comment_statements_only_for_existing_columns():
+    comments = {"VendorID": "provedor", "ausente": "nao aplica"}
+    stmts = comment_statements("cat.sch.tbl", comments, ["VendorID", "total_amount"])
+
+    assert stmts == [
+        "ALTER TABLE cat.sch.tbl ALTER COLUMN VendorID COMMENT 'provedor'"
+    ]
+
+
+def test_comment_statements_escapes_single_quotes():
+    comments = {"col": "US$1,25 p/ 'aeroporto'"}
+    stmts = comment_statements("t", comments, ["col"])
+
+    assert stmts == ["ALTER TABLE t ALTER COLUMN col COMMENT 'US$1,25 p/ ''aeroporto'''"]
+
+
+def test_to_snake_case_examples():
+    assert to_snake_case("VendorID") == "vendor_id"
+    assert to_snake_case("PULocationID") == "pu_location_id"
+    assert to_snake_case("DOLocationID") == "do_location_id"
+    assert to_snake_case("PUlocationID") == "pu_location_id"  # variante fhv (l minusculo)
+    assert to_snake_case("DOlocationID") == "do_location_id"
+    assert to_snake_case("RatecodeID") == "ratecode_id"
+    assert to_snake_case("dropOff_datetime") == "drop_off_datetime"
+    assert to_snake_case("SR_Flag") == "sr_flag"
+    assert to_snake_case("Affiliated_base_number") == "affiliated_base_number"
+    assert to_snake_case("tpep_pickup_datetime") == "tpep_pickup_datetime"
+    assert to_snake_case("Airport_fee") == "airport_fee"

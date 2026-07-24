@@ -6,8 +6,13 @@ resources:
 
       # Sem job_clusters: no Free Edition as tarefas rodam em compute
       # serverless (nao ha clusters classicos para configurar).
+      #
+      # Raw + bronze rodam para os quatro tipos de taxi (yellow, green, fhv,
+      # fhvhv). Silver + analise ficam no yellow, pois as colunas exigidas pelo
+      # case (passenger_count, total_amount, tpep_*) so existem no yellow/green.
       tasks:
-        - task_key: raw_ingestion
+        # --- Raw: uma tarefa de ingestao por tipo (podem rodar em paralelo) ---
+        - task_key: raw_yellow
           notebook_task:
             notebook_path: ../src/raw_ingestion.py
             base_parameters:
@@ -18,9 +23,43 @@ resources:
               raw_schema: raw
               volume: landing
 
+        - task_key: raw_green
+          notebook_task:
+            notebook_path: ../src/raw_ingestion.py
+            base_parameters:
+              taxi_type: green
+              date_start: "2023-01-01"
+              date_stop: "2023-05-01"
+              catalog: nyc_taxi
+              raw_schema: raw
+              volume: landing
+
+        - task_key: raw_fhv
+          notebook_task:
+            notebook_path: ../src/raw_ingestion.py
+            base_parameters:
+              taxi_type: fhv
+              date_start: "2023-01-01"
+              date_stop: "2023-05-01"
+              catalog: nyc_taxi
+              raw_schema: raw
+              volume: landing
+
+        - task_key: raw_fhvhv
+          notebook_task:
+            notebook_path: ../src/raw_ingestion.py
+            base_parameters:
+              taxi_type: fhvhv
+              date_start: "2023-01-01"
+              date_stop: "2023-05-01"
+              catalog: nyc_taxi
+              raw_schema: raw
+              volume: landing
+
+        # --- Bronze: replica exata por tipo (depende do raw correspondente) ---
         - task_key: bronze_yellow
           depends_on:
-            - task_key: raw_ingestion
+            - task_key: raw_yellow
           notebook_task:
             notebook_path: ../src/bronze/template.py
             base_parameters:
@@ -31,24 +70,106 @@ resources:
               catalog: nyc_taxi
               schema: bronze
 
-        - task_key: silver_trips
+        - task_key: bronze_green
+          depends_on:
+            - task_key: raw_green
+          notebook_task:
+            notebook_path: ../src/bronze/template.py
+            base_parameters:
+              taxi_type: green
+              date_start: "2023-01-01"
+              date_stop: "2023-05-01"
+              raw_path: /Volumes/nyc_taxi/raw/landing
+              catalog: nyc_taxi
+              schema: bronze
+
+        - task_key: bronze_fhv
+          depends_on:
+            - task_key: raw_fhv
+          notebook_task:
+            notebook_path: ../src/bronze/template.py
+            base_parameters:
+              taxi_type: fhv
+              date_start: "2023-01-01"
+              date_stop: "2023-05-01"
+              raw_path: /Volumes/nyc_taxi/raw/landing
+              catalog: nyc_taxi
+              schema: bronze
+
+        - task_key: bronze_fhvhv
+          depends_on:
+            - task_key: raw_fhvhv
+          notebook_task:
+            notebook_path: ../src/bronze/template.py
+            base_parameters:
+              taxi_type: fhvhv
+              date_start: "2023-01-01"
+              date_stop: "2023-05-01"
+              raw_path: /Volumes/nyc_taxi/raw/landing
+              catalog: nyc_taxi
+              schema: bronze
+
+        # --- Dimensao de zonas (taxi_zone_lookup), independente dos raws ---
+        - task_key: zone_lookup
+          notebook_task:
+            notebook_path: ../src/zone_lookup.py
+            base_parameters:
+              catalog: nyc_taxi
+              raw_schema: raw
+              volume: landing
+              target_schema: silver
+              table: taxi_zone_lookup
+
+        # --- Silver: uma tabela por tipo (snake_case + tipagem + zonas), mantendo
+        #     TODAS as colunas. Analise/agregacao ficam para a camada gold. ---
+        - task_key: silver_yellow
           depends_on:
             - task_key: bronze_yellow
+            - task_key: zone_lookup
           notebook_task:
-            notebook_path: ../src/silver_trips.py
+            notebook_path: ../src/silver/template.py
             base_parameters:
+              taxi_type: yellow
               catalog: nyc_taxi
               source_schema: bronze
-              source_table: yellow_trips
               target_schema: silver
-              table: trips
+              zone_table: taxi_zone_lookup
 
-        - task_key: analysis
+        - task_key: silver_green
           depends_on:
-            - task_key: silver_trips
+            - task_key: bronze_green
+            - task_key: zone_lookup
           notebook_task:
-            notebook_path: ../analysis/business_questions.py
+            notebook_path: ../src/silver/template.py
             base_parameters:
+              taxi_type: green
               catalog: nyc_taxi
-              schema: silver
-              table: trips
+              source_schema: bronze
+              target_schema: silver
+              zone_table: taxi_zone_lookup
+
+        - task_key: silver_fhv
+          depends_on:
+            - task_key: bronze_fhv
+            - task_key: zone_lookup
+          notebook_task:
+            notebook_path: ../src/silver/template.py
+            base_parameters:
+              taxi_type: fhv
+              catalog: nyc_taxi
+              source_schema: bronze
+              target_schema: silver
+              zone_table: taxi_zone_lookup
+
+        - task_key: silver_fhvhv
+          depends_on:
+            - task_key: bronze_fhvhv
+            - task_key: zone_lookup
+          notebook_task:
+            notebook_path: ../src/silver/template.py
+            base_parameters:
+              taxi_type: fhvhv
+              catalog: nyc_taxi
+              source_schema: bronze
+              target_schema: silver
+              zone_table: taxi_zone_lookup

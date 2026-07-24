@@ -21,7 +21,8 @@ import sys
 
 sys.path.insert(0, "../lib")
 
-from transforms import build_bronze, detect_pickup_col, month_list, unify_schemas
+from data_dictionary import comments_for
+from transforms import build_bronze, comment_statements, detect_pickup_col, month_list, unify_schemas
 
 # COMMAND ----------
 
@@ -97,6 +98,14 @@ if partition_by:
 writer.saveAsTable(full_table)
 
 print(f"Tabela {full_table} criada/atualizada com {df_bronze.count():,} linhas.")
+
+# COMMAND ----------
+
+# DBTITLE 1,Comentarios de coluna (data dictionary)
+# Aplica as descricoes do data dictionary da TLC para o taxi_type em questao.
+for stmt in comment_statements(full_table, comments_for(taxi_type), df_bronze.columns):
+    spark.sql(stmt)
+print(f"Comentarios de coluna aplicados para {taxi_type}.")
 
 # COMMAND ----------
 
