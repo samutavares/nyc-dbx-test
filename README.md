@@ -567,6 +567,20 @@ Rode-o **apos** o pipeline principal ter populado a camada silver.
   um S3 proprio): usamos **Volumes/Delta gerenciados** dentro do UC. Em um
   ambiente com UC completo, o caminho seria registrar uma *external location*
   apontando para o S3 e gravar as tabelas como *external* em Parquet/Delta.
+- **Silver sem chave unica:** nenhuma das tabelas silver tem uma **chave
+  primaria/negocio unica** (o dado da TLC nao traz um id de corrida). O ideal
+  seria gerar uma **chave unica por linha** em todas as tabelas silver (ex.:
+  hash deterministico da chave natural `pickup_datetime + dropoff_datetime +
+  PULocationID + DOLocationID + VendorID`, ou um id de surrogate estavel). Isso
+  habilitaria dedup confiavel, `MERGE`/upsert incremental e *surrogate keys*
+  estaveis no fato do gold.
+- **Possivel over-partitioning:** as tabelas bronze/silver sao particionadas por
+  `pickup_year`/`pickup_month`, mas o recorte atual e curto (Jan-Mai/2023 = 5
+  meses). Com tao poucos meses, o particionamento pode gerar **particoes de mais
+  / arquivos pequenos demais** para o volume de cada uma, prejudicando a
+  performance (muitos arquivos, *small file problem*). Em uma janela tao curta,
+  talvez fosse melhor particionar so por `pickup_year` (ou nao particionar) e
+  reavaliar a granularidade conforme o historico cresce.
 - **Qualidade de dados sem quarentena:** o silver mantem todas as linhas (nao
   filtra fares negativos, `dropoff < pickup`, datas fora do periodo, etc.). O
   ideal seria uma camada de **validacao** (
