@@ -69,10 +69,7 @@ df_raw = unify_schemas(dfs)
 # DBTITLE 1,Bronze: dedup + metadado + particoes (logica testada em tests/)
 # build_bronze faz dedup sobre TODAS as colunas originais (antes de adicionar
 # metadado) e acrescenta dt_ingestion + pickup_year/pickup_month.
-rows_before = df_raw.count()
 df_bronze = build_bronze(df_raw)
-rows_after = df_bronze.count()
-print(f"Dedup: {rows_before:,} -> {rows_after:,} linhas ({rows_before - rows_after:,} duplicadas removidas)")
 
 partition_by = ["pickup_year", "pickup_month"] if detect_pickup_col(df_raw.columns) else []
 print(f"Colunas: {len(df_bronze.columns)} | particao: {partition_by}")
@@ -97,7 +94,7 @@ if partition_by:
 
 writer.saveAsTable(full_table)
 
-print(f"Tabela {full_table} criada/atualizada com {df_bronze.count():,} linhas.")
+print(f"Tabela {full_table} criada/atualizada.")
 
 # COMMAND ----------
 

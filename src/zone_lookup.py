@@ -79,7 +79,6 @@ else:
 df_zone = snake_case_columns(spark.read.option("header", "true").csv(csv_path))
 df_zone = df_zone.withColumn("location_id", F.col("location_id").cast("int"))
 
-print(f"Zonas: {df_zone.count()}")
 display(df_zone)
 
 # COMMAND ----------

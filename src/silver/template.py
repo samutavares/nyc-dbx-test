@@ -54,14 +54,12 @@ print(f"Gravando: {target_full_table}")
 
 # DBTITLE 1,Leitura da camada bronze
 df_raw = spark.read.table(source_full_table)
-print(f"Linhas lidas: {df_raw.count():,}")
 
 # COMMAND ----------
 
 # DBTITLE 1,Dimensao de zonas (para enriquecimento)
 if spark.catalog.tableExists(zone_full_table):
     df_zone = spark.read.table(zone_full_table)
-    print(f"Zonas carregadas: {df_zone.count()}")
 else:
     df_zone = None
     print(f"[aviso] {zone_full_table} nao encontrada; silver sem enriquecimento de zonas.")
@@ -71,7 +69,6 @@ else:
 # DBTITLE 1,Padronizacao leve (snake_case + tipagem + particao + zonas + rotulos)
 df_silver = standardize_silver(df_raw, zone_df=df_zone, taxi_type=taxi_type)
 
-print(f"Linhas (mantidas todas): {df_silver.count():,}")
 print(f"Colunas: {df_silver.columns}")
 
 # COMMAND ----------
