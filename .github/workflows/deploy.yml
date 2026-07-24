@@ -1,0 +1,72 @@
+name: CI/CD
+
+# Pipeline de CI/CD:
+#  - test:   roda os testes unitarios (PySpark) em cada push/PR.
+#  - deploy: implanta o bundle (job serverless + notebooks) via DAB, apenas
+#            apos os testes passarem, em push na main ou disparo manual.
+#
+# Auth do deploy por token: configure os secrets do repositorio
+#   - DATABRICKS_HOST   (ex.: https://dbc-xxxx.cloud.databricks.com)
+#   - DATABRICKS_TOKEN  (Personal Access Token / token de service principal)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_pipeline:
+        description: "Rodar o job apos o deploy?"
+        type: boolean
+        default: false
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Java (PySpark)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run unit tests
+        run: pytest tests -v
+
+  deploy:
+    name: Validate & deploy
+    runs-on: ubuntu-latest
+    needs: test
+    if: ${{ github.event_name != 'pull_request' }}
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Databricks CLI
+        uses: databricks/setup-cli@main
+
+      - name: Validate bundle
+        run: databricks bundle validate --target dev
+
+      - name: Deploy bundle
+        run: databricks bundle deploy --target dev
+
+      - name: Run pipeline (opcional, manual)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_pipeline }}
+        run: databricks bundle run nyc_taxi_pipeline --target dev
