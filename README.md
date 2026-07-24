@@ -258,15 +258,17 @@ API 2.1) com 13 tarefas encadeadas por `depends_on`: para cada um dos quatro
 tipos (yellow, green, fhv, fhvhv) um encadeamento
 `raw_<tipo> -> bronze_<tipo> -> silver_<tipo>`, mais uma tarefa `zone_lookup`
 (dimensao de zonas) da qual todos os `silver_<tipo>` dependem. Os raws e o
-`zone_lookup` sao independentes (rodam em paralelo). A camada **gold**
-(analise) sera adicionada depois. Nao ha `job_clusters`: na Free Edition as
-tarefas rodam em **compute serverless**.
+`zone_lookup` sao independentes (rodam em paralelo). A camada **gold** roda em um
+**job separado** (`jobs/nyc_taxi_gold.json`): `gold_dimensions ->
+gold_fact_trips -> gold_aggregations` (SQL). Nao ha `job_clusters`: na Free
+Edition as tarefas rodam em **compute serverless**.
 
 Para importar (via Databricks CLI):
 
 ```bash
-# ajuste git_url no JSON e configure a Databricks CLI antes
+# ajuste git_url nos JSONs e configure a Databricks CLI antes
 databricks jobs create --json-file jobs/nyc_taxi_pipeline.json
+databricks jobs create --json-file jobs/nyc_taxi_gold.json
 ```
 
 ## Deploy com Databricks Asset Bundles (DAB)
