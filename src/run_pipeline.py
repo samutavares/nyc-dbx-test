@@ -38,6 +38,17 @@ silver_schema = dbutils.widgets.get("silver_schema")
 # Caminho do Volume, derivado para as etapas seguintes.
 raw_path = f"/Volumes/{catalog}/{raw_schema}/{volume}"
 
+# Janela valida de datas para a limpeza do silver: do inicio ate o primeiro dia
+# do mes SEGUINTE ao ultimo mes ingerido (fim exclusivo). Assim datas absurdas
+# da TLC sao descartadas e o particionamento fica restrito ao periodo real.
+import datetime as _dt
+
+_last_month = _dt.datetime.strptime(date_stop, "%Y-%m-%d").replace(day=1)
+valid_date_start = date_start
+valid_date_stop = (
+    (_last_month.replace(day=28) + _dt.timedelta(days=7)).replace(day=1).strftime("%Y-%m-%d")
+)
+
 # Timeout por etapa (segundos). fhvhv e volumoso e pode demorar.
 STEP_TIMEOUT = 3600
 
@@ -109,6 +120,8 @@ for taxi_type in taxi_types:
             "source_schema": bronze_schema,
             "target_schema": silver_schema,
             "zone_table": "taxi_zone_lookup",
+            "valid_date_start": valid_date_start,
+            "valid_date_stop": valid_date_stop,
         },
     )
     print(result)

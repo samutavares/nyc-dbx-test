@@ -599,16 +599,18 @@ Rode-o **apos** o pipeline principal ter populado a camada silver.
   PULocationID + DOLocationID + VendorID`, ou um id de surrogate estavel). Isso
   habilitaria dedup confiavel, `MERGE`/upsert incremental e *surrogate keys*
   estaveis no fato do gold.
-- **Possivel over-partitioning:** as tabelas bronze/silver sao particionadas por
-  `pickup_year`/`pickup_month`, mas o recorte atual e curto (Jan-Mai/2023 = 5
-  meses). Com tao poucos meses, o particionamento pode gerar **particoes de mais
-  / arquivos pequenos demais** para o volume de cada uma, prejudicando a
-  performance (muitos arquivos, *small file problem*). Em uma janela tao curta,
-  talvez fosse melhor particionar so por `pickup_year` (ou nao particionar) e
-  reavaliar a granularidade conforme o historico cresce.
-- **Qualidade de dados sem quarentena:** o silver mantem todas as linhas (nao
-  filtra fares negativos, `dropoff < pickup`, datas fora do periodo, etc.). O
-  ideal seria uma camada de **validacao** (
+- **Particionamento e over-partitioning:** o **bronze nao e particionado** e o
+  **silver** particiona por `pickup_year`/`pickup_month`. Como a limpeza de
+  datas do silver restringe os dados ao periodo ingerido (Jan-Mai/2023), sobram
+  ~5 particoes reais (sem diretorios orfaos por datas absurdas). Ainda assim,
+  para uma janela tao curta o particionamento por mes traz pouco ganho; em
+  producao valeria reavaliar a granularidade (ex.: so por ano, ou nenhuma) e
+  usar `OPTIMIZE`/compactacao conforme o historico cresce.
+- **Qualidade de dados so cobre datas:** o silver hoje **limpa apenas datas
+  invalidas** (pickup fora da janela, dropoff < pickup). Ainda **nao** trata
+  outros problemas (fares negativos, `passenger_count` absurdo, zonas
+  invalidas, etc.) nem mantem uma tabela de **quarentena** com os registros
+  descartados. O ideal seria uma camada de **validacao** (
   Great Expectations ou testes com pyspark) e uma tabela de **quarentena** para registros invalidos,
   antes/dentro do gold.
 - **Medidas nao 100% conformadas no fato:** `fhv` nao tem tarifa/passageiros
