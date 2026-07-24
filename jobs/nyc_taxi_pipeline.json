@@ -90,7 +90,8 @@
                         "date_stop": "2023-05-01",
                         "raw_path": "/Volumes/nyc_taxi/raw/landing",
                         "catalog": "nyc_taxi",
-                        "schema": "bronze"
+                        "schema": "bronze",
+                        "dedup": "false"
                     }
                 },
                 "timeout_seconds": 0
@@ -111,7 +112,8 @@
                         "date_stop": "2023-05-01",
                         "raw_path": "/Volumes/nyc_taxi/raw/landing",
                         "catalog": "nyc_taxi",
-                        "schema": "bronze"
+                        "schema": "bronze",
+                        "dedup": "false"
                     }
                 },
                 "timeout_seconds": 0
@@ -132,7 +134,8 @@
                         "date_stop": "2023-05-01",
                         "raw_path": "/Volumes/nyc_taxi/raw/landing",
                         "catalog": "nyc_taxi",
-                        "schema": "bronze"
+                        "schema": "bronze",
+                        "dedup": "false"
                     }
                 },
                 "timeout_seconds": 0
@@ -153,7 +156,8 @@
                         "date_stop": "2023-05-01",
                         "raw_path": "/Volumes/nyc_taxi/raw/landing",
                         "catalog": "nyc_taxi",
-                        "schema": "bronze"
+                        "schema": "bronze",
+                        "dedup": "false"
                     }
                 },
                 "timeout_seconds": 0

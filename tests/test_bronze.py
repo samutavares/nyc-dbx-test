@@ -22,6 +22,49 @@ def test_bronze_removes_identical_rows(spark):
     assert out.count() == 2
 
 
+def test_bronze_dedup_off_keeps_duplicates(spark):
+    rows = [
+        (1, "2023-01-01 00:00:00"),
+        (1, "2023-01-01 00:00:00"),  # duplicata exata - deve ser MANTIDA
+        (2, "2023-02-01 00:00:00"),
+    ]
+    df = spark.createDataFrame(rows, ["VendorID", "tpep_pickup_datetime"])
+
+    out = build_bronze(df, dedup=False)
+
+    assert out.count() == 3
+
+
+def test_bronze_dedup_by_key_columns(spark):
+    # Mesma chave (pickup + PU) em duas linhas com valores diferentes de fare:
+    # dedup por chave deve manter apenas uma.
+    rows = [
+        (1, "2023-01-01 00:00:00", 132, 10.0),
+        (2, "2023-01-01 00:00:00", 132, 99.0),  # mesma chave (pickup, PU)
+        (3, "2023-01-02 00:00:00", 100, 20.0),
+    ]
+    cols = ["VendorID", "tpep_pickup_datetime", "PULocationID", "fare_amount"]
+    df = spark.createDataFrame(rows, cols)
+
+    out = build_bronze(df, dedup_keys=["tpep_pickup_datetime", "PULocationID"])
+
+    assert out.count() == 2
+
+
+def test_bronze_dedup_keys_absent_falls_back_to_all_columns(spark):
+    rows = [
+        (1, "2023-01-01 00:00:00"),
+        (1, "2023-01-01 00:00:00"),  # duplicata exata
+        (2, "2023-02-01 00:00:00"),
+    ]
+    df = spark.createDataFrame(rows, ["VendorID", "tpep_pickup_datetime"])
+
+    # chave inexistente -> fallback para todas as colunas (remove a duplicata)
+    out = build_bronze(df, dedup_keys=["coluna_inexistente"])
+
+    assert out.count() == 2
+
+
 def test_bronze_preserves_all_columns_and_adds_metadata(spark):
     df = spark.createDataFrame(
         [(1, "2023-01-15 08:30:00", "algum_valor")],

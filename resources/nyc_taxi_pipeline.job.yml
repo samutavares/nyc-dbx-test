@@ -69,6 +69,8 @@ resources:
               raw_path: /Volumes/nyc_taxi/raw/landing
               catalog: nyc_taxi
               schema: bronze
+              dedup: "false"
+
 
         - task_key: bronze_green
           depends_on:
@@ -82,6 +84,7 @@ resources:
               raw_path: /Volumes/nyc_taxi/raw/landing
               catalog: nyc_taxi
               schema: bronze
+              dedup: "false"
 
         - task_key: bronze_fhv
           depends_on:
@@ -95,6 +98,7 @@ resources:
               raw_path: /Volumes/nyc_taxi/raw/landing
               catalog: nyc_taxi
               schema: bronze
+              dedup: "false"
 
         - task_key: bronze_fhvhv
           depends_on:
@@ -108,6 +112,7 @@ resources:
               raw_path: /Volumes/nyc_taxi/raw/landing
               catalog: nyc_taxi
               schema: bronze
+              dedup: "false"
 
         # --- Dimensao de zonas (taxi_zone_lookup), independente dos raws ---
         - task_key: zone_lookup

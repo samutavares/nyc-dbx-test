@@ -66,8 +66,19 @@ def detect_pickup_col(columns, candidates=None):
     return next((c for c in candidates if c in columns), None)
 
 
-def deduplicate(df: DataFrame) -> DataFrame:
-    """Remove linhas 100% identicas (todas as colunas)."""
+def deduplicate(df: DataFrame, subset=None) -> DataFrame:
+    """Remove duplicatas.
+
+    - `subset=None`: remove linhas 100% identicas (todas as colunas). Correto,
+      porem caro em datasets grandes (shuffle de todas as colunas).
+    - `subset=[...]`: remove duplicatas apenas pelas colunas informadas (chave
+      natural). Muito mais barato. Colunas inexistentes sao ignoradas; se
+      nenhuma existir, faz fallback para todas as colunas.
+    """
+    if subset:
+        keys = [c for c in subset if c in df.columns]
+        if keys:
+            return df.dropDuplicates(keys)
     return df.dropDuplicates(df.columns)
 
 
@@ -154,13 +165,20 @@ def unify_schemas(dfs) -> DataFrame:
     return reduce(lambda a, b: a.unionByName(b), aligned)
 
 
-def build_bronze(df: DataFrame) -> DataFrame:
-    """Bronze = replica exata: dedup + metadado de ingestao + particoes.
+def build_bronze(df: DataFrame, dedup: bool = True, dedup_keys=None) -> DataFrame:
+    """Bronze = replica exata: dedup (opcional) + metadado de ingestao + particoes.
 
     Preserva todas as colunas originais; adiciona apenas `dt_ingestion` e,
     quando ha coluna de pickup, `pickup_year`/`pickup_month`.
+
+    Parametros de dedup (a raw e idempotente e o bronze faz overwrite, entao o
+    dedup e apenas uma rede de seguranca):
+      - `dedup=False`: nao deduplica (mais rapido; ideal para fhv/fhvhv gigantes).
+      - `dedup_keys=[...]`: deduplica por uma/duas colunas-chave (barato).
+      - `dedup=True` e `dedup_keys=None`: deduplica por todas as colunas (caro).
     """
-    df = deduplicate(df)
+    if dedup:
+        df = deduplicate(df, subset=dedup_keys)
 
     pickup_col = detect_pickup_col(df.columns)
     df = df.withColumn("dt_ingestion", F.current_timestamp())

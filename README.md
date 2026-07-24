@@ -232,6 +232,19 @@ Os mapas codigo->rotulo vivem em `src/lib/data_dictionary.py` (`VENDOR_NAMES`,
 | `raw_path`  | `/Volumes/nyc_taxi/raw/landing`| landing (Volume) de origem       |
 | `catalog`   | `nyc_taxi`                     | catalogo (Unity Catalog)         |
 | `schema`    | `bronze`                       | schema bronze destino            |
+| `dedup`     | `true`                         | `true`/`false` liga/desliga dedup |
+| `dedup_keys`| _(vazio)_                      | colunas-chave (csv); vazio=todas |
+
+> **Deduplicacao configuravel.** Como a raw e idempotente (arquivos ja
+> baixados sao pulados) e o bronze faz `overwrite`, o dedup e apenas uma rede
+> de seguranca. O dado da TLC **nao tem um id de corrida unico**; a chave
+> natural aproximada seria a combinacao `pickup_datetime + dropoff_datetime +
+> PULocationID + DOLocationID + VendorID`. Por isso ha tres modos:
+> - `dedup=false`: nao deduplica (mais rapido; usado em `fhv`/`fhvhv`, que tem
+>   dezenas de milhoes de linhas e cujo dedup por todas as colunas custava caro);
+> - `dedup_keys="col_a,col_b"`: deduplica so por 1-2 colunas-chave (barato);
+> - `dedup=true` sem `dedup_keys`: deduplica por todas as colunas (correto,
+>   porem caro) - padrao para `yellow`/`green`, que sao menores.
 
 `src/silver/template.py`
 
@@ -303,9 +316,11 @@ funcoes, entao os testes validam **exatamente** o codigo que roda em producao.
 
 Cobertura por tabela (`tests/`):
 
-- **bronze** (`test_bronze.py`): dedup de linhas identicas, preservacao de
-  todas as colunas originais, metadado `dt_ingestion`, derivacao de
-  `pickup_year`/`pickup_month`, suporte a diferentes colunas de pickup
+- **bronze** (`test_bronze.py`): dedup de linhas identicas, dedup desligado
+  (`dedup=false`), dedup por colunas-chave (`dedup_keys`) e fallback quando a
+  chave nao existe, preservacao de todas as colunas originais, metadado
+  `dt_ingestion`, derivacao de `pickup_year`/`pickup_month`, suporte a
+  diferentes colunas de pickup
   (yellow/green) e reconciliacao de schema (`unify_schemas`: promocao de tipos
   e colunas com caixa diferente, ex.: `airport_fee`/`Airport_fee`).
 - **silver** (`test_silver.py`): conversao de **todos** os nomes para
@@ -541,7 +556,7 @@ Rode-o **apos** o pipeline principal ter populado a camada silver.
   tempo disponivel), todas as camadas gravam com `mode("overwrite")` /
   `CREATE OR REPLACE TABLE`, reprocessando a tabela inteira a cada execucao. O
   **ideal** seria uma escrita **incremental por `MERGE`** (upsert Delta /
-  `MERGE INTO`), atualizando apenas as particoes/chaves afetadas ï¿½ isso **nao
+  `MERGE INTO`), atualizando apenas as particoes/chaves afetadas ÿ isso **nao
   foi implementado por restricao de tempo**. Os dados ja estao preparados para
   isso (particionamento por `pickup_year`/`pickup_month` no bronze/silver e por
   `service_type_key` no fato; chaves de negocio disponiveis).

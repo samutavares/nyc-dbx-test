@@ -33,6 +33,12 @@ dbutils.widgets.text("date_stop", "2023-05-01", "Last month (YYYY-MM-DD)")
 dbutils.widgets.text("raw_path", "/Volumes/nyc_taxi/raw/landing", "Landing volume path")
 dbutils.widgets.text("catalog", "nyc_taxi", "Unity Catalog")
 dbutils.widgets.text("schema", "bronze", "Target bronze schema")
+# Dedup: como a raw e idempotente e o bronze faz overwrite, o dedup e so uma
+# rede de seguranca. Em datasets gigantes (fhv/fhvhv) ele custa caro; desligue
+# (dedup=false) ou informe 1-2 colunas-chave em dedup_keys (ex.:
+# "pickup_datetime,pu_location_id"). Vazio + dedup=true => todas as colunas.
+dbutils.widgets.text("dedup", "true", "Deduplicar? (true/false)")
+dbutils.widgets.text("dedup_keys", "", "Colunas de dedup (csv; vazio=todas)")
 
 taxi_type = dbutils.widgets.get("taxi_type")
 date_start = dbutils.widgets.get("date_start")
@@ -40,6 +46,8 @@ date_stop = dbutils.widgets.get("date_stop")
 raw_path = dbutils.widgets.get("raw_path")
 catalog = dbutils.widgets.get("catalog")
 schema = dbutils.widgets.get("schema")
+dedup = dbutils.widgets.get("dedup").strip().lower() == "true"
+dedup_keys = [c.strip() for c in dbutils.widgets.get("dedup_keys").split(",") if c.strip()] or None
 
 table = f"{taxi_type}_trips"
 full_table = f"{catalog}.{schema}.{table}"
@@ -66,10 +74,11 @@ print(f"Arquivos: {source_paths}")
 dfs = [spark.read.parquet(p) for p in source_paths]
 df_raw = unify_schemas(dfs)
 
-# DBTITLE 1,Bronze: dedup + metadado + particoes (logica testada em tests/)
-# build_bronze faz dedup sobre TODAS as colunas originais (antes de adicionar
-# metadado) e acrescenta dt_ingestion + pickup_year/pickup_month.
-df_bronze = build_bronze(df_raw)
+# DBTITLE 1,Bronze: dedup (opcional) + metadado + particoes (logica testada em tests/)
+# build_bronze deduplica conforme os widgets (desligado / por chave / todas as
+# colunas) e acrescenta dt_ingestion + pickup_year/pickup_month.
+print(f"Dedup: {'off' if not dedup else (dedup_keys or 'todas as colunas')}")
+df_bronze = build_bronze(df_raw, dedup=dedup, dedup_keys=dedup_keys)
 
 partition_by = ["pickup_year", "pickup_month"] if detect_pickup_col(df_raw.columns) else []
 print(f"Colunas: {len(df_bronze.columns)} | particao: {partition_by}")
