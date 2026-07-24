@@ -7,13 +7,25 @@ dados de corridas de taxi de Nova York (NYC TLC), referentes a
 O projeto segue uma **arquitetura medallion** (landing/raw -> bronze ->
 silver -> gold), usando **PySpark**, tabelas **Delta** e **Unity Catalog**
 (namespace de tres niveis `catalog.schema.table`). As camadas raw/bronze/silver
-estao implementadas; a **gold** e modelada como **star schema** (fato +
-dimensoes), com as tabelas agregadas (data marts) como proximo passo.
+e a **gold** estao implementadas: a gold e modelada como **star schema** (fato +
+dimensoes) com **tabelas agregadas** (data marts) e um **cubo analitico**, e
+**responde as perguntas de negocio do case** (ver
+[Perguntas do case e respostas](#perguntas-do-case-e-respostas-camada-gold)).
 
 > **Alvo: Databricks Free Edition.** A Free Edition (que substituiu a Community
 > Edition, aposentada no fim de 2025) ja vem com **Unity Catalog** e **compute
 > serverless**. Os notebooks criam o catalogo, os schemas e um **Volume** de
 > landing automaticamente (`CREATE CATALOG/SCHEMA/VOLUME IF NOT EXISTS`).
+
+> **Disclaimer (uso de IA).** Boa parte do **codigo** deste projeto foi gerada
+> com auxilio de **IA (Cursor)**, escolha feita **devido ao pouco tempo
+> disponivel para um projeto de tamanha complexidade** - a IA permitiu acelerar
+> a implementacao e cobrir mais escopo no prazo. As **decisoes de engenharia**,
+> no entanto, sao do autor: definicao da organizacao e da **arquitetura** do
+> projeto, a **analise dos dados** e as respostas as perguntas de negocio, a
+> **criacao dos dashboards**, o **desenho da modelagem da camada gold** (star
+> schema) e demais escolhas tecnicas. A IA foi usada como ferramenta de
+> produtividade para implementar essas decisoes, sempre sob revisao.
 
 ## Arquitetura
 
@@ -175,7 +187,7 @@ aplicadas sao:
 
 Nenhuma coluna e descartada e nenhuma linha e filtrada - a selecao das colunas
 exigidas pelo case, a limpeza e as agregacoes de negocio ficam para a camada
-**gold** (a ser construida depois).
+**gold** (implementada em `src/gold/`, ver secao da gold).
 
 ### Rotulos de negocio por tabela
 
@@ -267,7 +279,8 @@ Os mapas codigo->rotulo vivem em `src/lib/data_dictionary.py` (`VENDOR_NAMES`,
 | `valid_date_stop`  | `2023-06-01`     | data valida (fim, **exclusivo**)   |
 
 > A tabela de origem/destino e derivada de `taxi_type`
-> (`<taxi_type>_trips`). A camada **gold** (analise) sera adicionada depois.
+> (`<taxi_type>_trips`). A camada **gold** (analise) esta implementada em
+> `src/gold/` (ver secao da gold).
 
 > Para fazer **backfill** de outro periodo ou tipo, ajuste `date_start` /
 > `date_stop` (e `taxi_type` nos notebooks raw/bronze, ou `taxi_types` no
@@ -320,7 +333,7 @@ O `host` e o token vem das variaveis de ambiente `DATABRICKS_HOST` /
 
 ## Dashboard (Lakeview) via DAB
 
-O dashboard de analise (`An?lise dos t?xis de NY`) e versionado no repositorio e
+O dashboard de analise (`Analise dos taxis de NY`) e versionado no repositorio e
 implantado **junto com o bundle**. Os arquivos:
 
 - `resources/nyc_taxi_dashboard.lvdash.json` - definicao do dashboard Lakeview
@@ -330,14 +343,16 @@ implantado **junto com o bundle**. Os arquivos:
   aponta para o `.lvdash.json` e usa o warehouse `${var.warehouse_id}`.
 
 Como o dashboard executa queries num **SQL warehouse**, o `databricks.yml`
-declara a variavel `warehouse_id`. Ela **nao fica fixa** (muda por workspace):
+resolve o `warehouse_id` automaticamente pelo **nome** do warehouse (variavel
+`warehouse_name`, default `"Serverless Starter Warehouse"` - o warehouse
+pre-criado na Free Edition) via `lookup`. Assim voce **nao precisa saber o ID**:
 
-- **CI:** injetada via `BUNDLE_VAR_warehouse_id`, a partir do secret
-  `DATABRICKS_WAREHOUSE_ID` (ver secao CI/CD).
-- **Local:** passe `--var`:
+- **CI / Local:** nada a fazer alem de autenticar (host + token); o `lookup`
+  resolve o ID no momento do deploy.
+- **Outro warehouse:** passe o nome com `--var`:
 
 ```bash
-databricks bundle deploy -t dev --var="warehouse_id=<sql_warehouse_id>"
+databricks bundle deploy -t dev --var="warehouse_name=<nome_do_warehouse>"
 ```
 
 > O `.lvdash.json` e implantado **apenas** pela resource `dashboards`; o
@@ -392,11 +407,13 @@ O workflow `.github/workflows/deploy.yml` tem dois jobs:
 Configure os **secrets do repositorio** (Settings -> Secrets and variables ->
 Actions):
 
-| Secret                    | Valor                                              |
-|---------------------------|----------------------------------------------------|
-| `DATABRICKS_HOST`         | URL do workspace (ex.: `https://dbc-xxxx.cloud.databricks.com`) |
-| `DATABRICKS_TOKEN`        | Personal Access Token (ou token de service principal)          |
-| `DATABRICKS_WAREHOUSE_ID` | ID do SQL warehouse que roda as queries do dashboard Lakeview  |
+| Secret             | Valor                                                          |
+|--------------------|----------------------------------------------------------------|
+| `DATABRICKS_HOST`  | URL do workspace (ex.: `https://dbc-xxxx.cloud.databricks.com`) |
+| `DATABRICKS_TOKEN` | Personal Access Token (ou token de service principal)          |
+
+> O `warehouse_id` do dashboard **nao** precisa de secret: e resolvido pelo nome
+> do warehouse (`warehouse_name`) via `lookup` no `databricks.yml`.
 
 O workflow os injeta como variaveis de ambiente, entao a CLI autentica sem
 credenciais no codigo. Para tambem **executar** o job apos o deploy, dispare o
@@ -578,6 +595,44 @@ raw->silver, com tres tarefas encadeadas
 - **Jobs API:** `jobs/nyc_taxi_gold.json`.
 
 Rode-o **apos** o pipeline principal ter populado a camada silver.
+
+## Perguntas do case e respostas (camada gold)
+
+As perguntas de negocio do case sao respondidas **na camada gold**, com queries
+SQL sobre o star schema (`nyc_taxi.gold.*`). As consultas estao em
+`src/gold/aggregations.sql` (tabelas agregadas + as queries de resposta ao final
+do notebook).
+
+### Pergunta 1 - media de `total_amount` recebido em um mes (yellow)
+
+> Qual a media de valor total (`total_amount`) recebido em um mes considerando
+> todos os yellow taxis da frota?
+
+Respondida a partir de `gold.agg_revenue_monthly` filtrando
+`service_type = 'yellow'`: `avg_total_amount` (media por corrida no mes) e
+`sum_total_amount` (total recebido no mes).
+
+<img width="1258" alt="Pergunta 1 - media de total_amount por mes (yellow)" src="https://github.com/user-attachments/assets/192edc48-92b4-460a-bf89-c2412fe0bdfe" />
+
+### Pergunta 2 - media de `passenger_count` por hora do dia (maio, todos os tipos)
+
+> Qual a media de passageiros (`passenger_count`) por cada hora do dia que
+> pegaram taxi no mes de maio considerando todos os taxis da frota?
+
+Consulta direta a `gold.fact_trips` (join com `dim_date`/`dim_time`, filtro
+`month = 5`), garantindo media ponderada correta (nao media de medias).
+`passenger_count` e `NULL` para fhv/fhvhv, entao o `AVG` reflete os tipos que
+reportam passageiros (yellow/green).
+
+<img width="962" alt="Pergunta 2 - media de passenger_count por hora (maio)" src="https://github.com/user-attachments/assets/319faf3e-178a-4b28-996e-d7a47c669ab2" />
+
+### Dashboard (Lakeview)
+
+Alem das respostas, um **dashboard** reune as informacoes mais relevantes da
+analise e esta disponivel para deploy junto com o bundle (ver
+[Dashboard (Lakeview) via DAB](#dashboard-lakeview-via-dab)).
+
+<img width="1054" alt="Dashboard NYC Taxi" src="https://github.com/user-attachments/assets/366cbde0-7006-41a7-8767-13c1977aec0f" />
 
 ## Decisoes tecnicas
 
