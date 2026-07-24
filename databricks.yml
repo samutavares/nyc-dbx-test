@@ -1,0 +1,24 @@
+# Databricks Asset Bundle (DAB) - deploy declarativo do pipeline.
+#
+# Uso local:
+#   databricks bundle validate
+#   databricks bundle deploy -t dev
+#   databricks bundle run nyc_taxi_pipeline -t dev
+#
+# Autenticacao (host + token) vem das variaveis de ambiente
+# DATABRICKS_HOST e DATABRICKS_TOKEN. No CI elas sao injetadas a partir dos
+# secrets do GitHub; localmente use `databricks configure` (profile) ou
+# exporte as variaveis. Por isso o `host` NAO fica fixo neste arquivo.
+#
+# Alvo: Databricks Free Edition (Unity Catalog + serverless).
+
+bundle:
+  name: nyc_taxi_trips
+
+include:
+  - resources/*.yml
+
+targets:
+  dev:
+    mode: development
+    default: true

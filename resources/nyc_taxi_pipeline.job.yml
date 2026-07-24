@@ -1,0 +1,54 @@
+resources:
+  jobs:
+    nyc_taxi_pipeline:
+      name: nyc_taxi_pipeline
+      max_concurrent_runs: 1
+
+      # Sem job_clusters: no Free Edition as tarefas rodam em compute
+      # serverless (nao ha clusters classicos para configurar).
+      tasks:
+        - task_key: raw_ingestion
+          notebook_task:
+            notebook_path: ../src/raw_ingestion.py
+            base_parameters:
+              taxi_type: yellow
+              date_start: "2023-01-01"
+              date_stop: "2023-05-01"
+              catalog: nyc_taxi
+              raw_schema: raw
+              volume: landing
+
+        - task_key: bronze_yellow
+          depends_on:
+            - task_key: raw_ingestion
+          notebook_task:
+            notebook_path: ../src/bronze/template.py
+            base_parameters:
+              taxi_type: yellow
+              date_start: "2023-01-01"
+              date_stop: "2023-05-01"
+              raw_path: /Volumes/nyc_taxi/raw/landing
+              catalog: nyc_taxi
+              schema: bronze
+
+        - task_key: silver_trips
+          depends_on:
+            - task_key: bronze_yellow
+          notebook_task:
+            notebook_path: ../src/silver_trips.py
+            base_parameters:
+              catalog: nyc_taxi
+              source_schema: bronze
+              source_table: yellow_trips
+              target_schema: silver
+              table: trips
+
+        - task_key: analysis
+          depends_on:
+            - task_key: silver_trips
+          notebook_task:
+            notebook_path: ../analysis/business_questions.py
+            base_parameters:
+              catalog: nyc_taxi
+              schema: silver
+              table: trips

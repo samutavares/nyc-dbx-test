@@ -1,0 +1,91 @@
+{
+    "settings": {
+        "name": "nyc_taxi_pipeline",
+        "format": "MULTI_TASK",
+        "max_concurrent_runs": 1,
+        "email_notifications": {},
+        "git_source": {
+            "git_branch": "main",
+            "git_provider": "gitHub",
+            "git_url": "https://github.com/samutavares/nyc-dbx-test"
+        },
+        "tasks": [
+            {
+                "task_key": "raw_ingestion",
+                "notebook_task": {
+                    "notebook_path": "src/raw_ingestion",
+                    "source": "GIT",
+                    "base_parameters": {
+                        "taxi_type": "yellow",
+                        "date_start": "2023-01-01",
+                        "date_stop": "2023-05-01",
+                        "catalog": "nyc_taxi",
+                        "raw_schema": "raw",
+                        "volume": "landing"
+                    }
+                },
+                "timeout_seconds": 0
+            },
+            {
+                "task_key": "bronze_yellow",
+                "depends_on": [
+                    {
+                        "task_key": "raw_ingestion"
+                    }
+                ],
+                "notebook_task": {
+                    "notebook_path": "src/bronze/template",
+                    "source": "GIT",
+                    "base_parameters": {
+                        "taxi_type": "yellow",
+                        "date_start": "2023-01-01",
+                        "date_stop": "2023-05-01",
+                        "raw_path": "/Volumes/nyc_taxi/raw/landing",
+                        "catalog": "nyc_taxi",
+                        "schema": "bronze"
+                    }
+                },
+                "timeout_seconds": 0
+            },
+            {
+                "task_key": "silver_trips",
+                "depends_on": [
+                    {
+                        "task_key": "bronze_yellow"
+                    }
+                ],
+                "notebook_task": {
+                    "notebook_path": "src/silver_trips",
+                    "source": "GIT",
+                    "base_parameters": {
+                        "catalog": "nyc_taxi",
+                        "source_schema": "bronze",
+                        "source_table": "yellow_trips",
+                        "target_schema": "silver",
+                        "table": "trips"
+                    }
+                },
+                "timeout_seconds": 0
+            },
+            {
+                "task_key": "analysis",
+                "depends_on": [
+                    {
+                        "task_key": "silver_trips"
+                    }
+                ],
+                "notebook_task": {
+                    "notebook_path": "analysis/business_questions",
+                    "source": "GIT",
+                    "base_parameters": {
+                        "catalog": "nyc_taxi",
+                        "schema": "silver",
+                        "table": "trips"
+                    }
+                },
+                "timeout_seconds": 0
+            }
+        ],
+        "timeout_seconds": 0
+    }
+}
