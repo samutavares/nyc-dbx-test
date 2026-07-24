@@ -19,12 +19,19 @@ include:
   - resources/*.yml
 
 # Variaveis do bundle. O warehouse_id (SQL warehouse que roda as queries do
-# dashboard) muda por workspace, entao nao fica fixo: no CI e injetado via
-# BUNDLE_VAR_warehouse_id (secret DATABRICKS_WAREHOUSE_ID); localmente use
-# `--var="warehouse_id=<id>"`.
+# dashboard) e resolvido automaticamente pelo NOME do warehouse via `lookup`,
+# entao voce nao precisa descobrir/gerenciar o ID manualmente. No Databricks
+# Free Edition o warehouse pre-criado se chama "Serverless Starter Warehouse".
+# Se o seu warehouse tiver outro nome, ajuste em `targets.<t>.variables` abaixo
+# ou passe explicitamente com `--var="warehouse_name=<nome>"`.
 variables:
+  warehouse_name:
+    description: Nome do SQL warehouse usado para executar as queries do dashboard Lakeview.
+    default: "Serverless Starter Warehouse"
   warehouse_id:
-    description: ID do SQL warehouse usado para executar as queries do dashboard Lakeview.
+    description: ID do SQL warehouse (resolvido automaticamente a partir de warehouse_name).
+    lookup:
+      warehouse: ${var.warehouse_name}
 
 # O .lvdash.json e implantado pela resource `dashboards` (nao deve ser
 # sincronizado como arquivo bruto no workspace).

@@ -6,9 +6,9 @@
 -- MAGIC case e um **cubo analitico** (`GROUP BY CUBE`) com as combinacoes de
 -- MAGIC dimensoes mais usadas. Depende de `fact_trips.sql` e `dimensions.sql`.
 -- MAGIC
--- MAGIC Perguntas do case (respondidas filtrando as tabelas abaixo):
--- MAGIC 1. Media de `total_amount` por mes -> `agg_revenue_monthly`.
--- MAGIC 2. Media de `passenger_count` por hora do dia (Maio) -> `agg_trips_by_hour`.
+-- MAGIC Perguntas do case (respondidas nas queries ao final deste notebook):
+-- MAGIC 2. Media de `total_amount` recebido em um mes (yellow) -> `agg_revenue_monthly`.
+-- MAGIC 3. Media de `passenger_count` por hora do dia (Maio, todos os tipos) -> fato + `dim_time`.
 
 -- COMMAND ----------
 
@@ -113,23 +113,63 @@ GROUP BY CUBE (st.service_type, d.year, d.month, t.hour, puz.borough, pt.payment
 
 -- COMMAND ----------
 
--- DBTITLE 1,Case Q1 - media de total_amount por mes (yellow)
-SELECT year, month, avg_total_amount, trips
+-- MAGIC %md
+-- MAGIC ## Respostas do case (queries gold)
+
+-- COMMAND ----------
+
+-- DBTITLE 1,Pergunta 2 - media de total_amount recebido em um mes (yellow)
+-- MAGIC %md
+-- MAGIC **Q2.** Qual a media de valor total (`total_amount`) recebido em um mes
+-- MAGIC considerando todos os yellow taxis da frota?
+-- MAGIC
+-- MAGIC A media por corrida ja esta materializada em `agg_revenue_monthly`
+-- MAGIC (`avg_total_amount`). Trazemos tambem o total do mes (`sum_total_amount`) e,
+-- MAGIC na ultima linha, a media dos totais mensais (media de "quanto entra por mes").
+
+-- COMMAND ----------
+
+-- Media de total_amount POR CORRIDA, mes a mes (e o total recebido no mes).
+SELECT
+  year,
+  month,
+  trips,
+  ROUND(avg_total_amount, 2) AS avg_total_amount_por_corrida,
+  ROUND(sum_total_amount, 2) AS total_recebido_no_mes
 FROM nyc_taxi.gold.agg_revenue_monthly
 WHERE service_type = 'yellow'
 ORDER BY year, month;
 
 -- COMMAND ----------
 
--- DBTITLE 1,Case Q2 - media de passenger_count por hora (Maio, todos os tipos)
--- Consulta direta ao fato para media ponderada correta (nao media de medias).
+-- Media do valor total recebido POR MES (media dos totais mensais) - yellow.
+SELECT
+  ROUND(AVG(sum_total_amount), 2) AS media_total_recebido_por_mes,
+  ROUND(AVG(avg_total_amount), 2) AS media_total_amount_por_corrida
+FROM nyc_taxi.gold.agg_revenue_monthly
+WHERE service_type = 'yellow';
+
+-- COMMAND ----------
+
+-- DBTITLE 1,Pergunta 3 - media de passenger_count por hora do dia (Maio, todos os tipos)
+-- MAGIC %md
+-- MAGIC **Q3.** Qual a media de passageiros (`passenger_count`) por cada hora do dia
+-- MAGIC que pegaram taxi no mes de maio considerando todos os taxis da frota?
+-- MAGIC
+-- MAGIC Consulta direta ao fato para media ponderada correta (nao media de medias).
+-- MAGIC `passenger_count` e NULL para FHV/FHVHV, entao `AVG` ja ignora esses registros
+-- MAGIC e o resultado reflete os tipos que reportam passageiros (yellow/green).
+
+-- COMMAND ----------
+
 SELECT
   t.hour,
+  t.period_of_day,
   ROUND(AVG(f.passenger_count), 3) AS avg_passenger_count,
   COUNT(f.passenger_count)         AS trips_com_passageiros
 FROM nyc_taxi.gold.fact_trips f
 JOIN nyc_taxi.gold.dim_date d ON f.pickup_date_key = d.date_key
 JOIN nyc_taxi.gold.dim_time t ON f.pickup_time_key = t.time_key
 WHERE d.month = 5
-GROUP BY t.hour
+GROUP BY t.hour, t.period_of_day
 ORDER BY t.hour;
