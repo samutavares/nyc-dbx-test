@@ -68,8 +68,8 @@ else:
 
 # COMMAND ----------
 
-# DBTITLE 1,Padronizacao leve (snake_case + tipagem + particao + zonas)
-df_silver = standardize_silver(df_raw, zone_df=df_zone)
+# DBTITLE 1,Padronizacao leve (snake_case + tipagem + particao + zonas + rotulos)
+df_silver = standardize_silver(df_raw, zone_df=df_zone, taxi_type=taxi_type)
 
 print(f"Linhas (mantidas todas): {df_silver.count():,}")
 print(f"Colunas: {df_silver.columns}")

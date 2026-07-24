@@ -133,6 +133,51 @@ SILVER_DERIVED = {
     "is_airport_trip": "Verdadeiro quando embarque ou desembarque ocorre em zona de aeroporto (service_zone = 'Airports').",
 }
 
+# ---------------------------------------------------------------------------
+# Mapas codigo -> rotulo, usados para criar colunas *_name no silver
+# (yellow/green compartilham vendor/ratecode/payment; fhvhv usa a licenca HVFHS).
+# ---------------------------------------------------------------------------
+VENDOR_NAMES = {
+    1: "Creative Mobile Technologies",
+    2: "VeriFone Inc.",
+}
+RATECODE_NAMES = {
+    1: "Standard",
+    2: "JFK",
+    3: "Newark",
+    4: "Nassau/Westchester",
+    5: "Negociada",
+    6: "Group ride",
+}
+PAYMENT_TYPE_NAMES = {
+    1: "Cartao de credito",
+    2: "Dinheiro",
+    3: "Sem cobranca",
+    4: "Disputa",
+    5: "Desconhecido",
+    6: "Corrida anulada",
+}
+HVFHS_LICENSE_NAMES = {
+    "HV0002": "Juno",
+    "HV0003": "Uber",
+    "HV0004": "Via",
+    "HV0005": "Lyft",
+}
+
+# Descricoes das colunas *_name derivadas dos mapas acima.
+SILVER_LABELS = {
+    "vendor_name": "Nome do provedor correspondente a vendor_id (1=Creative Mobile Technologies; 2=VeriFone Inc.).",
+    "ratecode_name": "Descricao do codigo de tarifa correspondente a ratecode_id (1=Standard; 2=JFK; 3=Newark; 4=Nassau/Westchester; 5=Negociada; 6=Group ride).",
+    "payment_type_name": "Descricao da forma de pagamento correspondente a payment_type (1=Cartao de credito; 2=Dinheiro; 3=Sem cobranca; 4=Disputa; 5=Desconhecido; 6=Corrida anulada).",
+    "hvfhs_license_name": "Nome da empresa HVFHS correspondente a hvfhs_license_num (HV0002=Juno; HV0003=Uber; HV0004=Via; HV0005=Lyft).",
+}
+
+# Colunas Y/N convertidas para boolean no silver (sobrescrevem a descricao base).
+SILVER_BOOL_FLAGS = {
+    "store_and_fwd_flag": "Registro em store-and-forward (ficou na memoria do veiculo antes do envio), convertido para boolean (Y->true, N->false).",
+    "shared_request_flag": "Passageiro concordou com corrida compartilhada, convertido para boolean (Y->true, N->false).",
+}
+
 # Mapa por tipo de taxi (usado pelos notebooks bronze).
 DICTIONARIES = {
     "yellow": YELLOW,
@@ -172,7 +217,11 @@ def comments_for(taxi_type: str) -> dict:
 
 
 def silver_comments_for(taxi_type: str) -> dict:
-    """Descricoes das colunas do silver: originais em snake_case + derivadas/zonas."""
+    """Descricoes das colunas do silver: originais em snake_case + derivadas/zonas
+    + rotulos (*_name) + flags boolean. Colunas ausentes sao ignoradas ao aplicar
+    os comentarios (ver comment_statements)."""
     merged = {to_snake_case(col): desc for col, desc in comments_for(taxi_type).items()}
     merged.update(SILVER_DERIVED)
+    merged.update(SILVER_LABELS)
+    merged.update(SILVER_BOOL_FLAGS)
     return merged

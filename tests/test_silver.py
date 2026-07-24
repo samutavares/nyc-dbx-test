@@ -110,6 +110,71 @@ def test_silver_left_join_keeps_unknown_zone(spark):
     assert row["dropoff_borough"] == "Manhattan"
 
 
+GREEN_COLUMNS = [
+    "VendorID",
+    "lpep_pickup_datetime",
+    "lpep_dropoff_datetime",
+    "RatecodeID",
+    "store_and_fwd_flag",
+    "PULocationID",
+    "DOLocationID",
+    "payment_type",
+    "total_amount",
+]
+
+
+def test_silver_green_adds_code_labels_and_bool_flag(spark):
+    df = spark.createDataFrame(
+        [(2, "2023-02-01 08:00:00", "2023-02-01 08:20:00", 2.0, "Y", 130, 140, 1.0, 25.0)],
+        GREEN_COLUMNS,
+    )
+
+    out = standardize_silver(df, taxi_type="green")
+    row = out.collect()[0]
+    dtypes = dict(out.dtypes)
+
+    assert row["vendor_name"] == "VeriFone Inc."
+    assert row["ratecode_name"] == "JFK"
+    assert row["payment_type_name"] == "Cartao de credito"
+    assert dtypes["store_and_fwd_flag"] == "boolean"
+    assert row["store_and_fwd_flag"] is True
+    # colunas originais dos codigos permanecem
+    assert {"vendor_id", "ratecode_id", "payment_type"} <= set(out.columns)
+
+
+def test_silver_yellow_same_labels_as_green(spark):
+    df = _yellow_df(spark, [(1, 3, 40.0, "2023-05-01 10:00:00", "2023-05-01 10:30:00", 132, 100)])
+
+    row = standardize_silver(df, taxi_type="yellow").collect()[0]
+
+    assert row["vendor_name"] == "Creative Mobile Technologies"
+
+
+def test_silver_fhvhv_license_name_and_shared_bool(spark):
+    cols = ["hvfhs_license_num", "pickup_datetime", "dropoff_datetime", "PULocationID", "DOLocationID", "shared_request_flag"]
+    df = spark.createDataFrame(
+        [("HV0003", "2023-01-01 10:00:00", "2023-01-01 10:20:00", 132, 100, "N")],
+        cols,
+    )
+
+    out = standardize_silver(df, taxi_type="fhvhv")
+    row = out.collect()[0]
+    dtypes = dict(out.dtypes)
+
+    assert row["hvfhs_license_name"] == "Uber"
+    assert dtypes["shared_request_flag"] == "boolean"
+    assert row["shared_request_flag"] is False
+    assert "hvfhs_license_num" in out.columns
+
+
+def test_silver_unknown_code_maps_to_null(spark):
+    df = _yellow_df(spark, [(9, 1, 10.0, "2023-01-01 10:00:00", "2023-01-01 10:10:00", 1, 2)])
+
+    row = standardize_silver(df, taxi_type="yellow").collect()[0]
+
+    assert row["vendor_name"] is None
+
+
 def test_silver_fhv_columns_snake_cased_and_typed(spark):
     cols = ["dispatching_base_num", "pickup_datetime", "dropOff_datetime", "PUlocationID", "DOlocationID", "SR_Flag"]
     df = spark.createDataFrame(

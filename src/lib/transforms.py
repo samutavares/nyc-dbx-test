@@ -16,7 +16,13 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
 
-from data_dictionary import to_snake_case
+from data_dictionary import (
+    HVFHS_LICENSE_NAMES,
+    PAYMENT_TYPE_NAMES,
+    RATECODE_NAMES,
+    VENDOR_NAMES,
+    to_snake_case,
+)
 
 # Colunas exigidas pelo case (usadas no gold/analise, nao no silver).
 REQUIRED_COLUMNS = [
@@ -181,7 +187,7 @@ def snake_case_columns(df: DataFrame) -> DataFrame:
     return df
 
 
-def standardize_silver(df: DataFrame, zone_df: DataFrame = None) -> DataFrame:
+def standardize_silver(df: DataFrame, zone_df: DataFrame = None, taxi_type: str = None) -> DataFrame:
     """Silver = padronizacao leve, mantendo TODAS as colunas.
 
     Transformacoes leves (sem descartar colunas nem filtrar linhas - isso fica
@@ -189,7 +195,9 @@ def standardize_silver(df: DataFrame, zone_df: DataFrame = None) -> DataFrame:
       - converte TODOS os nomes de coluna para snake_case;
       - tipa (cast) as colunas de data/hora (timestamp) e de zona (int);
       - deriva `pickup_year`/`pickup_month` (particao) a partir do pickup;
-      - se `zone_df` for fornecido, enriquece com borough/zona (colunas extras).
+      - se `zone_df` for fornecido, enriquece com borough/zona (colunas extras);
+      - se `taxi_type` for fornecido, aplica os rotulos de negocio (colunas
+        *_name a partir dos codigos e flags Y/N convertidas para boolean).
     """
     df = snake_case_columns(df)
 
@@ -211,6 +219,59 @@ def standardize_silver(df: DataFrame, zone_df: DataFrame = None) -> DataFrame:
 
     if zone_df is not None:
         df = enrich_with_zones(df, zone_df)
+
+    if taxi_type:
+        df = add_coded_labels(df, taxi_type)
+    return df
+
+
+def _labeled_column(source_col: str, mapping: dict):
+    """Expressao que traduz `source_col` para o rotulo de `mapping` (else NULL)."""
+    expr = None
+    for key, label in mapping.items():
+        cond = F.col(source_col) == F.lit(key)
+        expr = F.when(cond, F.lit(label)) if expr is None else expr.when(cond, F.lit(label))
+    if expr is None:
+        return F.lit(None).cast("string")
+    return expr.otherwise(F.lit(None).cast("string"))
+
+
+def _yn_to_bool(source_col: str):
+    """Converte uma flag Y/N (string) para boolean (Y->true, N->false, else NULL)."""
+    norm = F.upper(F.trim(F.col(source_col).cast("string")))
+    return (
+        F.when(norm == "Y", F.lit(True))
+        .when(norm == "N", F.lit(False))
+        .otherwise(F.lit(None).cast("boolean"))
+    )
+
+
+def add_coded_labels(df: DataFrame, taxi_type: str) -> DataFrame:
+    """Adiciona colunas de negocio no silver, por tipo de taxi:
+
+    - yellow/green: `vendor_name`, `ratecode_name`, `payment_type_name` a partir
+      dos codigos; `store_and_fwd_flag` convertida para boolean;
+    - fhvhv: `hvfhs_license_name` a partir de `hvfhs_license_num`;
+      `shared_request_flag` convertida para boolean.
+    """
+    if taxi_type in ("yellow", "green"):
+        code_labels = [
+            ("vendor_id", "vendor_name", VENDOR_NAMES),
+            ("ratecode_id", "ratecode_name", RATECODE_NAMES),
+            ("payment_type", "payment_type_name", PAYMENT_TYPE_NAMES),
+        ]
+        for source_col, new_col, mapping in code_labels:
+            if source_col in df.columns:
+                df = df.withColumn(new_col, _labeled_column(source_col, mapping))
+        if "store_and_fwd_flag" in df.columns:
+            df = df.withColumn("store_and_fwd_flag", _yn_to_bool("store_and_fwd_flag"))
+    elif taxi_type == "fhvhv":
+        if "hvfhs_license_num" in df.columns:
+            df = df.withColumn(
+                "hvfhs_license_name", _labeled_column("hvfhs_license_num", HVFHS_LICENSE_NAMES)
+            )
+        if "shared_request_flag" in df.columns:
+            df = df.withColumn("shared_request_flag", _yn_to_bool("shared_request_flag"))
     return df
 
 

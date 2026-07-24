@@ -155,11 +155,27 @@ transformacoes leves aplicadas sao:
 - **tipagem** das colunas de data/hora (timestamp) e de zona (int);
 - derivacao de `pickup_year`/`pickup_month` (particao);
 - enriquecimento por zonas (borough/zona + `is_airport_trip`);
+- **rotulos de negocio por tipo** (colunas derivadas + flags boolean, ver abaixo);
 - `COMMENT` em cada coluna com a descricao do data dictionary da TLC.
 
 Nenhuma coluna e descartada e nenhuma linha e filtrada - a selecao das colunas
 exigidas pelo case, a limpeza e as agregacoes de negocio ficam para a camada
 **gold** (a ser construida depois).
+
+### Rotulos de negocio por tabela
+
+Alem da padronizacao, cada tabela silver ganha colunas derivadas a partir de
+codigos (mantendo os codigos originais) e converte flags `Y/N` para boolean:
+
+| Tabela                          | Colunas adicionadas / convertidas                                  |
+|---------------------------------|--------------------------------------------------------------------|
+| `silver.yellow_trips`           | `vendor_name`, `ratecode_name`, `payment_type_name`; `store_and_fwd_flag` -> boolean |
+| `silver.green_trips`            | `vendor_name`, `ratecode_name`, `payment_type_name`; `store_and_fwd_flag` -> boolean |
+| `silver.fhvhv_trips`            | `hvfhs_license_name` (HV0002=Juno, HV0003=Uber, HV0004=Via, HV0005=Lyft); `shared_request_flag` -> boolean |
+
+Os mapas codigo->rotulo vivem em `src/lib/data_dictionary.py` (`VENDOR_NAMES`,
+`RATECODE_NAMES`, `PAYMENT_TYPE_NAMES`, `HVFHS_LICENSE_NAMES`); a logica esta em
+`add_coded_labels` (`src/lib/transforms.py`). Codigos fora do mapa viram `NULL`.
 
 ## Como executar (Databricks Free Edition)
 
@@ -285,7 +301,9 @@ Cobertura por tabela (`tests/`):
   tipagem de data/hora e zona, derivacao das particoes e **enriquecimento por
   zonas** (join com `taxi_zone_lookup`, flag `is_airport_trip`, left join que
   preserva zonas desconhecidas), incluindo colunas estilo fhv (`dropOff_datetime`,
-  `PUlocationID`).
+  `PUlocationID`) e os **rotulos de negocio** por tipo (`vendor_name`,
+  `ratecode_name`, `payment_type_name`, `hvfhs_license_name` e flags Y/N ->
+  boolean).
 - **utils** (`test_utils.py`): `month_list`, `detect_pickup_col`,
   `comment_statements` (geracao/escape dos comentarios de coluna) e
   `to_snake_case`.
