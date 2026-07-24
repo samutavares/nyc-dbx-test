@@ -1,7 +1,8 @@
 """Testes da tabela bronze (`nyc_taxi.bronze.<taxi_type>_trips`).
 
-Bronze = replica exata: dedup de linhas identicas, preserva todas as colunas
-originais e adiciona metadado de ingestao + colunas de particao.
+Bronze = replica exata: dedup (opcional) de linhas identicas, preserva todas as
+colunas originais e adiciona apenas o metadado de ingestao `dt_ingestion`. NAO e
+particionado (a limpeza de datas e a particao ficam no silver).
 """
 
 from pyspark.sql import types as T
@@ -73,42 +74,29 @@ def test_bronze_preserves_all_columns_and_adds_metadata(spark):
 
     out = build_bronze(df)
 
-    for col in ["VendorID", "tpep_pickup_datetime", "extra_col", "dt_ingestion", "pickup_year", "pickup_month"]:
+    for col in ["VendorID", "tpep_pickup_datetime", "extra_col", "dt_ingestion"]:
         assert col in out.columns, f"coluna ausente: {col}"
 
 
-def test_bronze_derives_partition_values(spark):
+def test_bronze_is_not_partitioned(spark):
+    # Bronze nao deve mais derivar colunas de particao (isso vai para o silver).
     df = spark.createDataFrame(
         [(1, "2023-04-10 12:00:00")],
         ["VendorID", "tpep_pickup_datetime"],
     )
 
-    row = build_bronze(df).collect()[0]
-
-    assert row["pickup_year"] == 2023
-    assert row["pickup_month"] == 4
-
-
-def test_bronze_without_pickup_column(spark):
-    df = spark.createDataFrame([(1,), (2,)], ["VendorID"])
-
     out = build_bronze(df)
 
-    assert "dt_ingestion" in out.columns
     assert "pickup_year" not in out.columns
     assert "pickup_month" not in out.columns
 
 
-def test_bronze_supports_green_pickup_column(spark):
-    df = spark.createDataFrame(
-        [(1, "2023-05-01 00:00:00")],
-        ["VendorID", "lpep_pickup_datetime"],
-    )
+def test_bronze_only_adds_dt_ingestion(spark):
+    df = spark.createDataFrame([(1,), (2,)], ["VendorID"])
 
-    row = build_bronze(df).collect()[0]
+    out = build_bronze(df)
 
-    assert row["pickup_year"] == 2023
-    assert row["pickup_month"] == 5
+    assert set(out.columns) == {"VendorID", "dt_ingestion"}
 
 
 def test_unify_schemas_promotes_conflicting_numeric_types(spark):

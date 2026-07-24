@@ -166,10 +166,12 @@ def unify_schemas(dfs) -> DataFrame:
 
 
 def build_bronze(df: DataFrame, dedup: bool = True, dedup_keys=None) -> DataFrame:
-    """Bronze = replica exata: dedup (opcional) + metadado de ingestao + particoes.
+    """Bronze = replica exata: dedup (opcional) + metadado de ingestao.
 
-    Preserva todas as colunas originais; adiciona apenas `dt_ingestion` e,
-    quando ha coluna de pickup, `pickup_year`/`pickup_month`.
+    Preserva todas as colunas originais e adiciona apenas `dt_ingestion`. O
+    bronze NAO e particionado (o particionamento por mes explodia em diretorios
+    orfaos por causa de datas sujas da TLC); a limpeza de datas e a derivacao de
+    particao ficam no silver.
 
     Parametros de dedup (a raw e idempotente e o bronze faz overwrite, entao o
     dedup e apenas uma rede de seguranca):
@@ -180,15 +182,7 @@ def build_bronze(df: DataFrame, dedup: bool = True, dedup_keys=None) -> DataFram
     if dedup:
         df = deduplicate(df, subset=dedup_keys)
 
-    pickup_col = detect_pickup_col(df.columns)
-    df = df.withColumn("dt_ingestion", F.current_timestamp())
-
-    if pickup_col is not None:
-        df = (
-            df.withColumn("pickup_year", F.year(F.col(pickup_col).cast("timestamp")))
-            .withColumn("pickup_month", F.month(F.col(pickup_col).cast("timestamp")))
-        )
-    return df
+    return df.withColumn("dt_ingestion", F.current_timestamp())
 
 
 def _first_present(columns, candidates):
@@ -205,13 +199,51 @@ def snake_case_columns(df: DataFrame) -> DataFrame:
     return df
 
 
-def standardize_silver(df: DataFrame, zone_df: DataFrame = None, taxi_type: str = None) -> DataFrame:
-    """Silver = padronizacao leve, mantendo TODAS as colunas.
+def filter_valid_dates(df: DataFrame, valid_start: str, valid_end: str) -> DataFrame:
+    """Remove linhas com datas invalidas (limpeza de qualidade no silver).
 
-    Transformacoes leves (sem descartar colunas nem filtrar linhas - isso fica
-    para o gold):
+    Os arquivos da TLC contem `pickup_datetime` sujos (anos absurdos como 2001,
+    2008, 2098, ...). Isso: (a) polui a analise da gold; e (b) explode o
+    particionamento por mes em dezenas de diretorios orfaos. Aqui mantemos
+    apenas as corridas com pickup dentro de `[valid_start, valid_end)` e, quando
+    ha dropoff, com dropoff >= pickup (corrida coerente).
+
+    `valid_start`/`valid_end` sao strings 'YYYY-MM-DD' (fim exclusivo).
+    """
+    pu_dt = _first_present(df.columns, PICKUP_DT_CANDIDATES)
+    if pu_dt is None:
+        return df
+
+    pu_ts = F.col(pu_dt).cast("timestamp")
+    cond = (
+        pu_ts.isNotNull()
+        & (pu_ts >= F.lit(valid_start).cast("timestamp"))
+        & (pu_ts < F.lit(valid_end).cast("timestamp"))
+    )
+
+    do_dt = _first_present(df.columns, DROPOFF_DT_CANDIDATES)
+    if do_dt is not None:
+        do_ts = F.col(do_dt).cast("timestamp")
+        cond = cond & (do_ts.isNull() | (do_ts >= pu_ts))
+
+    return df.filter(cond)
+
+
+def standardize_silver(
+    df: DataFrame,
+    zone_df: DataFrame = None,
+    taxi_type: str = None,
+    valid_start: str = None,
+    valid_end: str = None,
+) -> DataFrame:
+    """Silver = padronizacao leve + limpeza de datas, mantendo TODAS as colunas.
+
+    Transformacoes leves (mantem todas as colunas; a unica remocao de linhas e a
+    limpeza de datas invalidas - selecoes/agregacoes de negocio ficam no gold):
       - converte TODOS os nomes de coluna para snake_case;
       - tipa (cast) as colunas de data/hora (timestamp) e de zona (int);
+      - se `valid_start`/`valid_end` forem informados, remove datas invalidas
+        (pickup fora do intervalo ou dropoff < pickup) via filter_valid_dates;
       - deriva `pickup_year`/`pickup_month` (particao) a partir do pickup;
       - se `zone_df` for fornecido, enriquece com borough/zona (colunas extras);
       - se `taxi_type` for fornecido, aplica os rotulos de negocio (colunas
@@ -228,6 +260,9 @@ def standardize_silver(df: DataFrame, zone_df: DataFrame = None, taxi_type: str 
     for loc in PU_LOCATION_CANDIDATES + DO_LOCATION_CANDIDATES:
         if loc in df.columns:
             df = df.withColumn(loc, F.col(loc).cast("int"))
+
+    if valid_start and valid_end:
+        df = filter_valid_dates(df, valid_start, valid_end)
 
     if pu_dt:
         df = (

@@ -40,10 +40,11 @@ dimensoes), com as tabelas agregadas (data marts) como proximo passo.
 
 **Tipos de taxi:** `raw`, `bronze` e `silver` rodam para os **quatro** datasets
 da TLC (`yellow`, `green`, `fhv`, `fhvhv`) - uma tabela por tipo em cada camada.
-O **silver** faz apenas padronizacao leve (snake_case, tipagem, particao,
-enriquecimento de zonas) **mantendo todas as colunas e todas as linhas**;
-selecoes, limpezas e agregacoes de negocio ficam para a camada **gold**, a ser
-construida depois.
+O **silver** faz padronizacao leve (snake_case, tipagem, particao,
+enriquecimento de zonas) **mantendo todas as colunas** e a **unica limpeza de
+linhas e a de datas invalidas** (remove pickups fora da janela valida e dropoff
+< pickup - datas absurdas da TLC); selecoes e agregacoes de negocio ficam para a
+camada **gold**.
 
 O encadeamento das etapas pode ser feito de duas formas:
 
@@ -123,13 +124,14 @@ Tudo vive sob o catalogo **`nyc_taxi`**, organizado em schemas por camada:
 
 - A landing zone e um **Unity Catalog Volume** (`/Volumes/nyc_taxi/raw/landing`),
   o armazenamento governado recomendado na Free Edition.
-- **bronze** preserva todas as colunas, adicionando apenas `dt_ingestion` e
-  colunas de particao; implementada como **template** parametrizado por
-  `taxi_type` (uma tabela por tipo de taxi).
+- **bronze** preserva todas as colunas, adicionando apenas `dt_ingestion`;
+  implementada como **template** parametrizado por `taxi_type` (uma tabela por
+  tipo de taxi). **Nao e particionada** (o particionamento por mes explodia em
+  diretorios orfaos por causa de datas sujas da TLC).
 - **silver** e um **template por tipo** (uma tabela por `taxi_type`) que faz
-  apenas transformacoes leves - converte os nomes para **snake_case**, tipa as
-  colunas de data/hora e zona, deriva particoes e enriquece com zonas -
-  **mantendo todas as colunas e todas as linhas**.
+  transformacoes leves - converte os nomes para **snake_case**, tipa as colunas
+  de data/hora e zona, **limpa datas invalidas**, deriva particoes e enriquece
+  com zonas - **mantendo todas as colunas**.
 - Os notebooks criam catalogo, schema e volume com
   `CREATE CATALOG / SCHEMA / VOLUME IF NOT EXISTS`.
 - As colunas de bronze e silver recebem **COMMENT** com as descricoes dos
@@ -154,12 +156,16 @@ Tudo vive sob o catalogo **`nyc_taxi`**, organizado em schemas por camada:
 ## Camada silver: padronizacao leve
 
 Cada tabela `nyc_taxi.silver.<taxi_type>_trips` e uma versao padronizada da
-bronze correspondente, **mantendo todas as colunas e todas as linhas**. As
-transformacoes leves aplicadas sao:
+bronze correspondente, **mantendo todas as colunas**. As transformacoes leves
+aplicadas sao:
 
 - **snake_case** em todos os nomes de coluna (ex.: `VendorID`->`vendor_id`,
   `PULocationID`->`pu_location_id`, `dropOff_datetime`->`drop_off_datetime`);
 - **tipagem** das colunas de data/hora (timestamp) e de zona (int);
+- **limpeza de datas invalidas** (remove pickups fora da janela
+  `[valid_date_start, valid_date_stop)` e dropoff < pickup) - unica remocao de
+  linhas, controlada pelos widgets `valid_date_start`/`valid_date_stop`
+  (default `2023-01-01`/`2023-06-01`, o periodo ingerido);
 - derivacao de `pickup_year`/`pickup_month` (particao);
 - enriquecimento por zonas (borough/zona + `is_airport_trip`);
 - **rotulos de negocio por tipo** (colunas derivadas + flags boolean, ver abaixo);
@@ -255,6 +261,8 @@ Os mapas codigo->rotulo vivem em `src/lib/data_dictionary.py` (`VENDOR_NAMES`,
 | `source_schema` | `bronze`            | schema bronze de origem            |
 | `target_schema` | `silver`            | schema silver destino              |
 | `zone_table`    | `taxi_zone_lookup`  | dimensao de zonas para enriquecer  |
+| `valid_date_start` | `2023-01-01`     | data valida (inicio, inclusivo)    |
+| `valid_date_stop`  | `2023-06-01`     | data valida (fim, **exclusivo**)   |
 
 > A tabela de origem/destino e derivada de `taxi_type`
 > (`<taxi_type>_trips`). A camada **gold** (analise) sera adicionada depois.
@@ -319,14 +327,15 @@ Cobertura por tabela (`tests/`):
 - **bronze** (`test_bronze.py`): dedup de linhas identicas, dedup desligado
   (`dedup=false`), dedup por colunas-chave (`dedup_keys`) e fallback quando a
   chave nao existe, preservacao de todas as colunas originais, metadado
-  `dt_ingestion`, derivacao de `pickup_year`/`pickup_month`, suporte a
-  diferentes colunas de pickup
-  (yellow/green) e reconciliacao de schema (`unify_schemas`: promocao de tipos
+  `dt_ingestion`, ausencia de particao (bronze so adiciona `dt_ingestion`) e
+  reconciliacao de schema (`unify_schemas`: promocao de tipos
   e colunas com caixa diferente, ex.: `airport_fee`/`Airport_fee`).
 - **silver** (`test_silver.py`): conversao de **todos** os nomes para
-  snake_case, preservacao de todas as colunas e todas as linhas (sem filtragem),
-  tipagem de data/hora e zona, derivacao das particoes e **enriquecimento por
-  zonas** (join com `taxi_zone_lookup`, flag `is_airport_trip`, left join que
+  snake_case, preservacao de todas as colunas, **limpeza de datas invalidas**
+  (pickups fora da janela e dropoff < pickup) e nao-filtragem quando a janela
+  nao e informada, tipagem de data/hora e zona, derivacao das particoes e
+  **enriquecimento por zonas** (join com `taxi_zone_lookup`, flag
+  `is_airport_trip`, left join que
   preserva zonas desconhecidas), incluindo colunas estilo fhv (`dropOff_datetime`,
   `PUlocationID`) e os **rotulos de negocio** por tipo (`vendor_name`,
   `ratecode_name`, `payment_type_name`, `hvfhs_license_name` e flags Y/N ->
@@ -547,13 +556,15 @@ Rode-o **apos** o pipeline principal ter populado a camada silver.
 - **Landing zone em UC Volume** (`/Volumes/nyc_taxi/raw/landing`) em vez de
   DBFS: e o armazenamento governado recomendado, acessivel tanto pela API
   POSIX (download) quanto pelo Spark (leitura).
-- **Camada bronze como replica exata** (todas as colunas), isolando a origem
-  das transformacoes posteriores.
+- **Camada bronze como replica exata** (todas as colunas, sem particao),
+  isolando a origem das transformacoes posteriores.
 - **Bronze e silver como templates** parametrizados por `taxi_type`: o mesmo
   notebook atende yellow/green/fhv/fhvhv (uma tabela por tipo em cada camada).
-- **Silver como padronizacao leve** (snake_case, tipagem, particao, zonas)
-  mantendo todas as colunas/linhas; selecao, limpeza e agregacao ficam para o
-  **gold**, separando padronizacao de modelagem de negocio.
+- **Silver como padronizacao leve** (snake_case, tipagem, limpeza de datas,
+  particao, zonas) mantendo todas as colunas; selecao e agregacao ficam para o
+  **gold**, separando padronizacao de modelagem de negocio. A limpeza de datas
+  no silver garante que o particionamento por mes fique restrito ao periodo
+  ingerido (sem diretorios orfaos) e que a gold receba apenas datas validas.
 - **Unity Catalog** (namespace `catalog.schema.table`) como camada de
   metadados/governanca: o catalogo `nyc_taxi` separa as camadas em schemas
   (`raw`, `bronze`, `silver`), criados via `CREATE CATALOG/SCHEMA/VOLUME`.
@@ -572,7 +583,7 @@ Rode-o **apos** o pipeline principal ter populado a camada silver.
   **ideal** seria uma escrita **incremental por `MERGE`** (upsert Delta /
   `MERGE INTO`), atualizando apenas as particoes/chaves afetadas ÿ isso **nao
   foi implementado por restricao de tempo**. Os dados ja estao preparados para
-  isso (particionamento por `pickup_year`/`pickup_month` no bronze/silver e por
+  isso (particionamento por `pickup_year`/`pickup_month` no silver e por
   `service_type_key` no fato; chaves de negocio disponiveis).
 - **Armazenamento:** o mais adequado para escala seria persistir os arquivos em
   **Parquet num bucket S3** (data lake externo, com ciclo de vida/custos

@@ -22,7 +22,7 @@ import sys
 sys.path.insert(0, "../lib")
 
 from data_dictionary import comments_for
-from transforms import build_bronze, comment_statements, detect_pickup_col, month_list, unify_schemas
+from transforms import build_bronze, comment_statements, month_list, unify_schemas
 
 # COMMAND ----------
 
@@ -74,14 +74,14 @@ print(f"Arquivos: {source_paths}")
 dfs = [spark.read.parquet(p) for p in source_paths]
 df_raw = unify_schemas(dfs)
 
-# DBTITLE 1,Bronze: dedup (opcional) + metadado + particoes (logica testada em tests/)
+# DBTITLE 1,Bronze: dedup (opcional) + metadado (logica testada em tests/)
 # build_bronze deduplica conforme os widgets (desligado / por chave / todas as
-# colunas) e acrescenta dt_ingestion + pickup_year/pickup_month.
+# colunas) e acrescenta dt_ingestion. O bronze NAO e particionado: o
+# particionamento por mes explodia em diretorios orfaos por datas sujas da TLC.
 print(f"Dedup: {'off' if not dedup else (dedup_keys or 'todas as colunas')}")
 df_bronze = build_bronze(df_raw, dedup=dedup, dedup_keys=dedup_keys)
 
-partition_by = ["pickup_year", "pickup_month"] if detect_pickup_col(df_raw.columns) else []
-print(f"Colunas: {len(df_bronze.columns)} | particao: {partition_by}")
+print(f"Colunas: {len(df_bronze.columns)} (bronze sem particao)")
 
 # COMMAND ----------
 
@@ -92,18 +92,14 @@ spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}")
 # COMMAND ----------
 
 # DBTITLE 1,Escrita da tabela Delta (bronze)
-writer = (
+(
     df_bronze.write.format("delta")
     .mode("overwrite")
     .option("overwriteSchema", "true")
+    .saveAsTable(full_table)
 )
 
-if partition_by:
-    writer = writer.partitionBy(*partition_by)
-
-writer.saveAsTable(full_table)
-
-print(f"Tabela {full_table} criada/atualizada.")
+print(f"Tabela {full_table} criada/atualizada (sem particao).")
 
 # COMMAND ----------
 

@@ -139,6 +139,8 @@ resources:
               source_schema: bronze
               target_schema: silver
               zone_table: taxi_zone_lookup
+              valid_date_start: "2023-01-01"
+              valid_date_stop: "2023-06-01"
 
         - task_key: silver_green
           depends_on:
@@ -152,6 +154,8 @@ resources:
               source_schema: bronze
               target_schema: silver
               zone_table: taxi_zone_lookup
+              valid_date_start: "2023-01-01"
+              valid_date_stop: "2023-06-01"
 
         - task_key: silver_fhv
           depends_on:
@@ -165,6 +169,8 @@ resources:
               source_schema: bronze
               target_schema: silver
               zone_table: taxi_zone_lookup
+              valid_date_start: "2023-01-01"
+              valid_date_stop: "2023-06-01"
 
         - task_key: silver_fhvhv
           depends_on:
@@ -178,3 +184,5 @@ resources:
               source_schema: bronze
               target_schema: silver
               zone_table: taxi_zone_lookup
+              valid_date_start: "2023-01-01"
+              valid_date_stop: "2023-06-01"

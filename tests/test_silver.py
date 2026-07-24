@@ -1,8 +1,9 @@
 """Testes da camada silver (uma tabela por tipo: `nyc_taxi.silver.<taxi_type>_trips`).
 
 Silver = padronizacao leve: converte todos os nomes para snake_case, tipa as
-colunas de data/hora e zona, deriva particoes e enriquece com zonas -
-mantendo TODAS as colunas e TODAS as linhas (limpeza/agregacao ficam no gold).
+colunas de data/hora e zona, deriva particoes e enriquece com zonas - mantendo
+TODAS as colunas. A unica remocao de linhas e a limpeza de datas invalidas
+(quando `valid_start`/`valid_end` sao informados); agregacoes ficam no gold.
 """
 
 from transforms import standardize_silver
@@ -57,8 +58,9 @@ def test_silver_casts_datetime_and_location(spark):
     assert dtypes["do_location_id"] == "int"
 
 
-def test_silver_keeps_all_rows(spark):
-    # Linhas que a antiga limpeza descartaria devem ser MANTIDAS no silver.
+def test_silver_keeps_all_rows_without_date_window(spark):
+    # Sem janela de datas, o silver NAO filtra linhas (comportamento padrao):
+    # so a limpeza de datas remove linhas, e apenas quando valid_start/end sao dados.
     rows = [
         (1, 1, 10.0, "2023-01-01 10:00:00", "2023-01-01 10:30:00", 1, 2),
         (1, 1, -5.0, "2023-01-01 10:00:00", "2023-01-01 10:30:00", 1, 2),   # valor negativo
@@ -68,6 +70,37 @@ def test_silver_keeps_all_rows(spark):
     out = standardize_silver(_yellow_df(spark, rows))
 
     assert out.count() == 3
+
+
+def test_silver_cleans_out_of_range_dates(spark):
+    # Com janela valida, datas absurdas da TLC (anos 2001/2098) e anteriores ao
+    # inicio sao removidas - so sobra a corrida dentro de [start, end).
+    rows = [
+        (1, 1, 10.0, "2023-03-01 10:00:00", "2023-03-01 10:30:00", 1, 2),   # dentro
+        (1, 1, 10.0, "2098-01-01 10:00:00", "2098-01-01 10:30:00", 1, 2),   # ano absurdo
+        (1, 1, 10.0, "2001-05-01 10:00:00", "2001-05-01 10:30:00", 1, 2),   # ano absurdo
+        (1, 1, 10.0, "2022-12-31 23:00:00", "2022-12-31 23:30:00", 1, 2),   # antes do inicio
+    ]
+
+    out = standardize_silver(
+        _yellow_df(spark, rows), valid_start="2023-01-01", valid_end="2023-06-01"
+    )
+
+    assert out.count() == 1
+    assert out.collect()[0]["pickup_year"] == 2023
+
+
+def test_silver_cleans_dropoff_before_pickup(spark):
+    rows = [
+        (1, 1, 10.0, "2023-03-01 10:00:00", "2023-03-01 10:30:00", 1, 2),   # ok
+        (1, 1, 10.0, "2023-03-01 10:00:00", "2023-03-01 09:00:00", 1, 2),   # dropoff < pickup
+    ]
+
+    out = standardize_silver(
+        _yellow_df(spark, rows), valid_start="2023-01-01", valid_end="2023-06-01"
+    )
+
+    assert out.count() == 1
 
 
 def test_silver_derives_partition_values(spark):
